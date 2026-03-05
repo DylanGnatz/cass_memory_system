@@ -19,7 +19,7 @@ import {
   isToonOutput,
   validateOneOf
 } from "../utils.js";
-import { isLLMAvailable, getAvailableProviders, validateApiKey } from "../llm.js";
+import { isLLMAvailable, getAvailableProviders, validateApiKey, resolveOllamaBaseUrl } from "../llm.js";
 import { SECRET_PATTERNS, compileExtraPatterns } from "../sanitize.js";
 import { loadPlaybook, savePlaybook, createEmptyPlaybook } from "../playbook.js";
 import { withLock } from "../lock.js";
@@ -396,7 +396,7 @@ async function computeDoctorChecks(
     llmStatus = "pass";
     if (configuredProviderAvailable) {
       if (config.provider === "ollama") {
-        const baseUrl = config.ollamaBaseUrl || process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+        const baseUrl = resolveOllamaBaseUrl(config.ollamaBaseUrl);
         llmMessage = `Provider: ollama (${baseUrl})`;
       } else {
         llmMessage = `Provider: ${config.provider} (ready)`;

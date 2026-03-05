@@ -128,13 +128,25 @@ export function validateApiKey(provider: string): void {
   }
 }
 
+/**
+ * Resolve the Ollama base URL from config, OLLAMA_BASE_URL, or OLLAMA_HOST.
+ * OLLAMA_HOST may be just "host:port" (no scheme), so we prepend http:// if needed.
+ */
+export function resolveOllamaBaseUrl(ollamaBaseUrl?: string): string {
+  if (ollamaBaseUrl) return ollamaBaseUrl;
+  if (process.env.OLLAMA_BASE_URL) return process.env.OLLAMA_BASE_URL;
+  const host = process.env.OLLAMA_HOST;
+  if (host) {
+    return host.startsWith("http") ? host : `http://${host}`;
+  }
+  return "http://localhost:11434";
+}
+
 export function getModel(config: { provider: string; model: string; apiKey?: string; ollamaBaseUrl?: string }): LanguageModel {
   const provider = config.provider as LLMProvider;
 
   if (provider === "ollama") {
-    const baseURL = config.ollamaBaseUrl
-      || process.env.OLLAMA_BASE_URL
-      || "http://localhost:11434";
+    const baseURL = resolveOllamaBaseUrl(config.ollamaBaseUrl);
     // ollama-ai-provider expects baseURL with /api suffix
     const normalizedBase = baseURL.replace(/\/+$/, "");
     const apiBase = normalizedBase.endsWith("/api") ? normalizedBase : `${normalizedBase}/api`;
