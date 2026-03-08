@@ -318,9 +318,12 @@ export async function generateContextResult(
   });
 
   const maxBullets = flags.limit ?? flags.top ?? config.maxBulletsInContext;
+  const minRelevance = config.minRelevanceScore;
   // scoredBullets is already sorted by finalScore with relevanceScore tie-breaker
+  // Filter by relevanceScore against config.minRelevanceScore (not finalScore > 0)
+  // so that the configured threshold is actually respected
   const topBullets = scoredBullets
-    .filter(b => (b.finalScore || 0) > 0)
+    .filter(b => (b.relevanceScore ?? 0) >= minRelevance)
     .slice(0, maxBullets);
 
   const rules = topBullets.filter(b => !b.isNegative && b.kind !== "anti_pattern");
@@ -477,7 +480,7 @@ export async function contextWithoutCass(
     scoredBullets.sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
 
     const topBullets = scoredBullets
-      .filter(b => (b.finalScore || 0) > 0)
+      .filter(b => (b.relevanceScore ?? 0) >= config.minRelevanceScore)
       .slice(0, maxBullets ?? config.maxBulletsInContext);
 
     const rules = topBullets.filter(b => !b.isNegative && b.kind !== "anti_pattern");
@@ -771,8 +774,9 @@ export async function contextCommand(
       console.log(`(No relevant playbook rules found)\n`);
     } else {
       for (const b of rules) {
-        const score = Number.isFinite(b.effectiveScore) ? b.effectiveScore.toFixed(1) : "n/a";
-        console.log(`- **${b.id}** (${b.category}/${b.kind}, score ${score}): ${b.content.trim()}`);
+        const relevance = Number.isFinite(b.relevanceScore) ? b.relevanceScore.toFixed(1) : "n/a";
+        const confidence = Number.isFinite(b.effectiveScore) ? b.effectiveScore.toFixed(1) : "n/a";
+        console.log(`- **${b.id}** (${b.category}/${b.kind}, relevance ${relevance}, confidence ${confidence}): ${b.content.trim()}`);
       }
       console.log("");
     }
@@ -839,9 +843,10 @@ export async function contextCommand(
     const contentWidth = Math.max(24, maxWidth - 2);
 
     for (const b of rules) {
-      const score = Number.isFinite(b.effectiveScore) ? b.effectiveScore.toFixed(1) : "n/a";
+      const relevance = Number.isFinite(b.relevanceScore) ? b.relevanceScore.toFixed(1) : "n/a";
+      const confidence = Number.isFinite(b.effectiveScore) ? b.effectiveScore.toFixed(1) : "n/a";
       const maturity = b.maturity ? ` • ${b.maturity}` : "";
-      console.log(chalk.bold(`[${b.id}]`) + chalk.dim(` ${b.category}/${b.kind} • score ${score}${maturity}`));
+      console.log(chalk.bold(`[${b.id}]`) + chalk.dim(` ${b.category}/${b.kind} • relevance ${relevance} • confidence ${confidence}${maturity}`));
       for (const line of wrapText(b.content, contentWidth)) {
         console.log(`  ${line}`);
       }

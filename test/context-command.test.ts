@@ -910,7 +910,8 @@ describe("contextCommand markdown output", () => {
 
         expect(output).toContain("## Playbook rules");
         expect(output).toContain("b-api");
-        expect(output).toContain("score");
+        expect(output).toContain("relevance");
+        expect(output).toContain("confidence");
       } finally {
         capture.restore();
       }
