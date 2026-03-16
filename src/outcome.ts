@@ -404,10 +404,12 @@ export async function applyOutcomeFeedback(
 
 /**
  * Regex to match playbook rule IDs in session transcripts.
- * Matches the generated format b-{base36}-{base36} (e.g., b-m2x1k5-abc123)
- * and short-form IDs (e.g., b-8f3a2c) as used in documentation/examples.
+ * Requires at least 6 alphanumeric chars after "b-" to avoid short false
+ * positives (b-tree, b-tag). A post-filter additionally requires at least
+ * one digit, since generated IDs (from Date.now().toString(36)) always
+ * contain digits while English words (b-spline, b-factor) do not.
  */
-const RULE_ID_PATTERN = /\bb-[a-z0-9]{3,}(?:-[a-z0-9]+)*\b/gi;
+const RULE_ID_PATTERN = /\bb-[a-z0-9]{6,}(?:-[a-z0-9]+)*\b/gi;
 
 /**
  * Extract playbook rule IDs (b-xxx format) from session transcript content.
@@ -415,12 +417,17 @@ const RULE_ID_PATTERN = /\bb-[a-z0-9]{3,}(?:-[a-z0-9]+)*\b/gi;
  * Scans for IDs as they appear in cm context output, inline feedback
  * comments, and general references in conversation. Results are
  * deduplicated and lowercased for consistent matching.
+ *
+ * Filters out pure-alpha matches (no digits) to exclude common words
+ * like "b-spline" or "b-factor" that would otherwise match the pattern.
  */
 export function extractRuleIdsFromTranscript(content: string): string[] {
   if (!content) return [];
   const matches = content.match(RULE_ID_PATTERN);
   if (!matches) return [];
-  return [...new Set(matches.map(m => m.toLowerCase()))];
+  // Real bullet IDs always contain digits (from base36-encoded timestamps).
+  // Pure-alpha matches are common English words, not IDs.
+  return [...new Set(matches.filter(m => /\d/.test(m)).map(m => m.toLowerCase()))];
 }
 
 /**

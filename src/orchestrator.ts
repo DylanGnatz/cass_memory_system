@@ -208,8 +208,12 @@ export async function orchestrateReflection(
             inlineFeedbackDeltaCount += inlineFeedback.length;
           }
 
-          // Extract rule IDs and classify session outcome for auto-recording
-          const ruleIds = extractRuleIdsFromTranscript(content);
+          // Extract rule IDs and classify session outcome for auto-recording.
+          // Exclude IDs that already have explicit inline feedback to avoid
+          // double-counting (they get direct signal from the delta above).
+          const inlineFeedbackIds = new Set(inlineFeedback.map(fb => fb.bulletId.toLowerCase()));
+          const ruleIds = extractRuleIdsFromTranscript(content)
+            .filter(id => !inlineFeedbackIds.has(id));
           if (ruleIds.length > 0) {
             const outcomeInput = classifySessionOutcome(content, diary, ruleIds);
             if (outcomeInput) {

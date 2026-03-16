@@ -73,7 +73,7 @@ describe("extractRuleIdsFromTranscript", () => {
     expect(ids).toContain("b-x7k9p1");
   });
 
-  it("handles short-form IDs", () => {
+  it("handles short-form IDs (6+ chars)", () => {
     const content = "Referencing b-abc123 from the playbook";
     expect(extractRuleIdsFromTranscript(content)).toEqual(["b-abc123"]);
   });
@@ -81,6 +81,22 @@ describe("extractRuleIdsFromTranscript", () => {
   it("does not match too-short segments", () => {
     // "b-to" should not match (only 2 chars after b-)
     const content = "going from a-to-b-to-c quickly";
+    expect(extractRuleIdsFromTranscript(content)).toEqual([]);
+  });
+
+  it("does not match common words like b-tree, b-tag", () => {
+    const content = "Use a b-tree data structure with b-tag elements";
+    expect(extractRuleIdsFromTranscript(content)).toEqual([]);
+  });
+
+  it("does not match pure-alpha words like b-spline, b-factor", () => {
+    // These are 6+ chars but have no digits — real IDs always have digits
+    const content = "Use b-spline curves and compute the b-factor coefficient";
+    expect(extractRuleIdsFromTranscript(content)).toEqual([]);
+  });
+
+  it("does not match 5-char segments that could be short words", () => {
+    const content = "the b-value and b-point were set";
     expect(extractRuleIdsFromTranscript(content)).toEqual([]);
   });
 
