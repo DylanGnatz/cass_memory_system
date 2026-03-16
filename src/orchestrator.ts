@@ -7,8 +7,9 @@ import { reflectOnSession } from "./reflect.js";
 import { validateDelta } from "./validate.js";
 import type { LLMIO } from "./llm.js";
 import { curatePlaybook } from "./curate.js";
-import { expandPath, log, warn, error, now, fileExists, resolveRepoDir, generateBulletId, hashContent, jaccardSimilarity, ensureDir } from "./utils.js";
+import { expandPath, log, warn, error, now, fileExists, resolveRepoDir, generateBulletId, hashContent, jaccardSimilarity, ensureDir, parseInlineFeedback } from "./utils.js";
 import { withLock } from "./lock.js";
+import { extractRuleIdsFromTranscript, classifySessionOutcome, recordOutcome, applyOutcomeFeedback, type OutcomeInput } from "./outcome.js";
 import path from "node:path";
 
 export interface ReflectionOptions {
@@ -30,6 +31,13 @@ export interface ReflectionOutcome {
   repoResult?: CurationResult;
   dryRunDeltas?: PlaybookDelta[];
   errors: string[];
+  /** Auto-recorded rule outcomes from processed sessions */
+  autoOutcome?: {
+    outcomesRecorded: number;
+    feedbackApplied: number;
+    missingRules: string[];
+    inlineFeedbackDeltas: number;
+  };
 }
 
 export type ReflectionProgressEvent =
@@ -130,7 +138,9 @@ export async function orchestrateReflection(
     // 4. Reflection Phase (LLM) - Done WITHOUT holding playbook locks
     const allDeltas: PlaybookDelta[] = [];
     const pendingProcessedEntries: ProcessedEntry[] = [];
+    const pendingOutcomes: OutcomeInput[] = [];
     let sessionsProcessed = 0;
+    let inlineFeedbackDeltaCount = 0;
 
     for (let i = 0; i < unprocessed.length; i++) {
       const sessionPath = unprocessed[i]!;
@@ -143,7 +153,7 @@ export async function orchestrateReflection(
 
       try {
         const diary = await generateDiary(sessionPath, config);
-        
+
         // Quick check for empty sessions to save tokens
         const content = await cassExport(sessionPath, "text", config.cassPath, config) || "";
         if (content.length < 50) {
@@ -162,7 +172,7 @@ export async function orchestrateReflection(
             diaryId: diary.id,
             deltasGenerated: 0
           });
-          continue; 
+          continue;
         }
 
         const reflectResult = await reflectOnSession(diary, snapshotPlaybook, config, options.io);
@@ -182,6 +192,30 @@ export async function orchestrateReflection(
 
         if (validatedDeltas.length > 0) {
           allDeltas.push(...validatedDeltas);
+        }
+
+        // 4b. Auto-outcome: extract rule IDs, inline feedback, and classify session
+        if (content) {
+          // Parse inline feedback comments (// [cass: helpful b-xyz] - reason)
+          const inlineFeedback = parseInlineFeedback(content);
+          if (inlineFeedback.length > 0) {
+            for (const fb of inlineFeedback) {
+              const delta: PlaybookDelta = fb.type === "harmful"
+                ? { type: "harmful", bulletId: fb.bulletId, sourceSession: sessionPath, reason: "other", context: fb.reason }
+                : { type: "helpful", bulletId: fb.bulletId, sourceSession: sessionPath, context: fb.reason };
+              allDeltas.push(delta);
+            }
+            inlineFeedbackDeltaCount += inlineFeedback.length;
+          }
+
+          // Extract rule IDs and classify session outcome for auto-recording
+          const ruleIds = extractRuleIdsFromTranscript(content);
+          if (ruleIds.length > 0) {
+            const outcomeInput = classifySessionOutcome(content, diary, ruleIds);
+            if (outcomeInput) {
+              pendingOutcomes.push(outcomeInput);
+            }
+          }
         }
 
         // Defer marking as processed until merge succeeds to prevent data loss
@@ -368,12 +402,49 @@ export async function orchestrateReflection(
       await processedLog.appendBatch(pendingProcessedEntries);
     }
 
+    // 6. Auto-record rule outcomes (post-merge, best-effort)
+    let autoOutcome: ReflectionOutcome["autoOutcome"] | undefined;
+    if (pendingOutcomes.length > 0) {
+      try {
+        const records = [];
+        for (const input of pendingOutcomes) {
+          const record = await recordOutcome(input, config);
+          records.push(record);
+        }
+        const feedbackResult = await applyOutcomeFeedback(records, config);
+        autoOutcome = {
+          outcomesRecorded: records.length,
+          feedbackApplied: feedbackResult.applied,
+          missingRules: feedbackResult.missing,
+          inlineFeedbackDeltas: inlineFeedbackDeltaCount,
+        };
+        log(`Auto-recorded ${records.length} outcome(s): ${feedbackResult.applied} feedback event(s) applied`);
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        errors.push(`Auto-outcome recording failed: ${msg}`);
+        autoOutcome = {
+          outcomesRecorded: 0,
+          feedbackApplied: 0,
+          missingRules: [],
+          inlineFeedbackDeltas: inlineFeedbackDeltaCount,
+        };
+      }
+    } else if (inlineFeedbackDeltaCount > 0) {
+      autoOutcome = {
+        outcomesRecorded: 0,
+        feedbackApplied: 0,
+        missingRules: [],
+        inlineFeedbackDeltas: inlineFeedbackDeltaCount,
+      };
+    }
+
     return {
       sessionsProcessed,
       deltasGenerated: allDeltas.length,
       globalResult,
       repoResult,
-      errors
+      errors,
+      autoOutcome,
     };
   });
 }

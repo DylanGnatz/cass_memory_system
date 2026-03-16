@@ -311,6 +311,7 @@ export async function reflectCommand(
         global: result.globalResult,
         repo: result.repoResult,
         errors: result.errors,
+        autoOutcome: result.autoOutcome,
       },
       { startedAtMs }
     );
@@ -365,6 +366,27 @@ export async function reflectCommand(
       if (result.repoResult.inversions.length > 0) {
         console.log(chalk.yellow(`  Inverted ${result.repoResult.inversions.length} harmful rules.`));
       }
+    }
+
+    if (result.autoOutcome) {
+      const ao = result.autoOutcome;
+      console.log("");
+      console.log(chalk.bold(`Auto-Outcome Recording:`));
+      console.log(
+        formatKv(
+          [
+            { key: "Outcomes recorded", value: String(ao.outcomesRecorded) },
+            { key: "Feedback applied", value: String(ao.feedbackApplied) },
+            ...(ao.inlineFeedbackDeltas > 0
+              ? [{ key: "Inline feedback", value: String(ao.inlineFeedbackDeltas) }]
+              : []),
+            ...(ao.missingRules.length > 0
+              ? [{ key: "Missing rules", value: ao.missingRules.join(", ") }]
+              : []),
+          ],
+          { indent: "  ", width: maxWidth }
+        )
+      );
     }
 
     if (result.errors.length > 0) {

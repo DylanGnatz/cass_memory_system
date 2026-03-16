@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Config, FeedbackEvent } from "./types.js";
+import { Config, DiaryEntry, FeedbackEvent } from "./types.js";
 import { expandPath, ensureDir, fileExists, now, resolveRepoDir } from "./utils.js";
 import { sanitize } from "./sanitize.js";
 import { getSanitizeConfig } from "./config.js";
@@ -22,6 +22,11 @@ const POSITIVE_PATTERNS = [
   /great/i,
   /exactly what i needed/i,
   /solved it/i,
+  /\blgtm\b/i,
+  /looks good/i,
+  /nice work/i,
+  /well done/i,
+  /ship it/i,
 ];
 
 const NEGATIVE_PATTERNS = [
@@ -31,6 +36,11 @@ const NEGATIVE_PATTERNS = [
   /not what i wanted/i,
   /try again/i,
   /undo/i,
+  /\brevert\b/i,
+  /don't do that/i,
+  /that's not right/i,
+  /start over/i,
+  /roll\s*back/i,
 ];
 
 export function detectSentiment(text?: string): Sentiment {
@@ -388,4 +398,113 @@ export async function applyOutcomeFeedback(
   }
 
   return { applied, missing };
+}
+
+// --- Auto-Outcome: Rule ID Extraction & Session Classification ---
+
+/**
+ * Regex to match playbook rule IDs in session transcripts.
+ * Matches the generated format b-{base36}-{base36} (e.g., b-m2x1k5-abc123)
+ * and short-form IDs (e.g., b-8f3a2c) as used in documentation/examples.
+ */
+const RULE_ID_PATTERN = /\bb-[a-z0-9]{3,}(?:-[a-z0-9]+)*\b/gi;
+
+/**
+ * Extract playbook rule IDs (b-xxx format) from session transcript content.
+ *
+ * Scans for IDs as they appear in cm context output, inline feedback
+ * comments, and general references in conversation. Results are
+ * deduplicated and lowercased for consistent matching.
+ */
+export function extractRuleIdsFromTranscript(content: string): string[] {
+  if (!content) return [];
+  const matches = content.match(RULE_ID_PATTERN);
+  if (!matches) return [];
+  return [...new Set(matches.map(m => m.toLowerCase()))];
+}
+
+/**
+ * Heuristic patterns for counting error-like signals in transcripts.
+ * Each pattern must appear at least twice to count as a signal
+ * (single mentions could be discussion rather than actual errors).
+ */
+const ERROR_SIGNAL_PATTERNS = [
+  /\berror\b/gi,
+  /\bfailed\b/gi,
+  /\bexception\b/gi,
+  /\btraceback\b/gi,
+  /\bpanic\b/gi,
+];
+
+const RETRY_SIGNAL_PATTERNS = [
+  /try again/i,
+  /retrying/i,
+  /let me try/i,
+  /attempt.*again/i,
+];
+
+const REJECTION_SIGNAL_PATTERNS = [
+  /user denied/i,
+  /permission denied/i,
+  /tool.*rejected/i,
+  /user.*rejected/i,
+];
+
+/**
+ * Classify a session outcome from transcript content and diary entry.
+ *
+ * Uses lightweight heuristics:
+ * - diary.status as primary outcome signal
+ * - Sentiment detection on the tail of the transcript (more recent = more relevant)
+ * - Error pattern frequency
+ * - Retry and tool-rejection signals
+ *
+ * Returns null if no rule IDs are provided (nothing to record against).
+ */
+export function classifySessionOutcome(
+  content: string,
+  diary: DiaryEntry,
+  ruleIds: string[]
+): OutcomeInput | null {
+  if (ruleIds.length === 0) return null;
+
+  // Focus sentiment on the last portion of content (more recent = more relevant)
+  const tailLength = Math.max(2000, Math.floor(content.length * 0.2));
+  const tail = content.slice(-tailLength);
+  const sentiment = detectSentiment(tail);
+
+  // Count error-like patterns (require >=2 matches to count as a signal)
+  let errorCount = 0;
+  for (const p of ERROR_SIGNAL_PATTERNS) {
+    p.lastIndex = 0;
+    const matches = content.match(p);
+    if (matches && matches.length >= 2) errorCount++;
+  }
+
+  // Tool rejection signals add to error count
+  const rejectionCount = REJECTION_SIGNAL_PATTERNS.filter(p => p.test(content)).length;
+  errorCount += rejectionCount;
+
+  // Retry signals
+  const hadRetries = RETRY_SIGNAL_PATTERNS.some(p => p.test(content));
+
+  // Map diary status to outcome
+  const outcome: OutcomeStatus =
+    diary.status === "success" ? "success" :
+    diary.status === "failure" ? "failure" :
+    diary.status === "mixed" ? "mixed" : "partial";
+
+  // Use first accomplishment or key learning as task context
+  const task = diary.accomplishments?.[0] || diary.keyLearnings?.[0];
+
+  return {
+    sessionId: diary.sessionPath,
+    outcome,
+    rulesUsed: ruleIds,
+    sentiment,
+    errorCount,
+    hadRetries,
+    task,
+    durationSec: diary.duration,
+  };
 }
