@@ -257,7 +257,7 @@ describe("loadMergedPlaybook", () => {
       execSync("git init", { cwd: repo, stdio: "pipe" });
       process.chdir(repo);
 
-      const globalPath = path.join(home, ".cass-memory", "playbook.yaml");
+      const globalPath = path.join(home, ".memory-system", "playbook.yaml");
       const repoPath = path.join(repo, ".cass", "playbook.yaml");
 
       const globalPb = createEmptyPlaybook("global");
@@ -298,7 +298,7 @@ describe("loadMergedPlaybook", () => {
       execSync("git init", { cwd: repo, stdio: "pipe" });
       process.chdir(repo);
 
-      const globalPath = path.join(home, ".cass-memory", "playbook.yaml");
+      const globalPath = path.join(home, ".memory-system", "playbook.yaml");
       const repoPath = path.join(repo, ".cass", "playbook.yaml");
 
       const blockedContent = "bad rule to block";
@@ -316,7 +316,7 @@ describe("loadMergedPlaybook", () => {
       await writePlaybookFile(globalPath, globalPb);
       await writePlaybookFile(repoPath, repoPb);
 
-      const globalBlockedPath = path.join(home, ".cass-memory", "blocked.log");
+      const globalBlockedPath = path.join(home, ".memory-system", "blocked.log");
       const repoBlockedPath = path.join(repo, ".cass", "blocked.log");
       const blockedEntry = {
         id: "t-1",

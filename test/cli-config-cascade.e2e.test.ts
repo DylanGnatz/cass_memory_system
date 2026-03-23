@@ -3,7 +3,7 @@
  *
  * Tests that configuration properly cascades from:
  * 1. Default values
- * 2. Global config (~/.cass-memory/config.json)
+ * 2. Global config (~/.memory-system/config.json)
  * 3. Repo config (.cass/config.yaml)
  * 4. CLI overrides
  *
@@ -49,7 +49,7 @@ async function setupTestEnvironment() {
   const dir = await createTempDir();
   const home = path.join(dir, "home");
   const repo = path.join(dir, "repo");
-  const cassMemoryDir = path.join(home, ".cass-memory");
+  const cassMemoryDir = path.join(home, ".memory-system");
   const repoCassDir = path.join(repo, ".cass");
 
   await mkdir(cassMemoryDir, { recursive: true });
@@ -220,8 +220,8 @@ describe("E2E: Config Cascade", () => {
         // Create global config with safe paths
         const globalConfig = {
           cassPath: "safe-cass-path",
-          playbookPath: "~/.cass-memory/playbook.yaml",
-          diaryDir: "~/.cass-memory/diary"
+          playbookPath: "~/.memory-system/playbook.yaml",
+          diaryDir: "~/.memory-system/diary"
         };
         await writeFile(
           path.join(cassMemoryDir, "config.json"),
@@ -245,8 +245,8 @@ describe("E2E: Config Cascade", () => {
 
         // Sensitive paths should NOT be overridden
         expect(config.cassPath).toBe("safe-cass-path");
-        expect(config.playbookPath).toBe("~/.cass-memory/playbook.yaml");
-        expect(config.diaryDir).toBe("~/.cass-memory/diary");
+        expect(config.playbookPath).toBe("~/.memory-system/playbook.yaml");
+        expect(config.diaryDir).toBe("~/.memory-system/diary");
 
         // Non-sensitive settings should be overridden
         expect(config.verbose).toBe(true);

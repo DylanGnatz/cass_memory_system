@@ -311,7 +311,7 @@ Errors are structured and include recovery hints:
 {
   "success": false,
   "code": "PLAYBOOK_NOT_FOUND",
-  "error": "Playbook file not found at ~/.cass-memory/playbook.yaml",
+  "error": "Playbook file not found at ~/.memory-system/playbook.yaml",
   "hint": "Run 'cm init' to create a new playbook",
   "retryable": false
 }
@@ -504,7 +504,7 @@ cm onboard sample --fill-gaps
 
 Onboarding progress persists across sessions, so agents can resume where they left off even after context window limits are reached.
 
-**State stored at:** `~/.cass-memory/onboarding-state.json`
+**State stored at:** `~/.memory-system/onboarding-state.json`
 
 ```json
 {
@@ -814,7 +814,7 @@ The key to the system is automated reflection. Set up a cron job or hook:
 cm reflect --days 7 --json
 
 # Via cron (runs at 2am daily)
-0 2 * * * /usr/local/bin/cm reflect --days 7 >> ~/.cass-memory/reflect.log 2>&1
+0 2 * * * /usr/local/bin/cm reflect --days 7 >> ~/.memory-system/reflect.log 2>&1
 ```
 
 For Claude Code users, add a post-session hook in `.claude/hooks.json`:
@@ -1424,7 +1424,7 @@ function invertToAntiPattern(content: string): string {
 
 ## ⚙️ Configuration
 
-Config lives at `~/.cass-memory/config.json` (global) and `.cass/config.json` (repo).
+Config lives at `~/.memory-system/config.json` (global) and `.cass/config.json` (repo).
 
 **Precedence:** CLI flags > Repo config > Global config > Defaults
 
@@ -1478,8 +1478,8 @@ Config lives at `~/.cass-memory/config.json` (global) and `.cass/config.json` (r
     "enabled": false,
     "hosts": []
   },
-  "playbookPath": "~/.cass-memory/playbook.yaml",
-  "diaryDir": "~/.cass-memory/diary"
+  "playbookPath": "~/.memory-system/playbook.yaml",
+  "diaryDir": "~/.memory-system/diary"
 }
 ```
 
@@ -1681,7 +1681,7 @@ flowchart TB
 ### Directory Structure
 
 ```
-~/.cass-memory/                  # Global (user-level)
+~/.memory-system/                  # Global (user-level)
 ├── config.json                  # User configuration
 ├── playbook.yaml                # Personal playbook
 ├── diary/                       # Session summaries
@@ -1996,7 +1996,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
 - Environment variables (configuration only)
 
 **What cass-memory writes:**
-- `~/.cass-memory/` directory contents
+- `~/.memory-system/` directory contents
 - `.cass/` directory in repos (if project-level config)
 
 **What cass-memory NEVER does:**
@@ -2171,7 +2171,7 @@ Patterns are stored at two levels:
 
 | Scope | Location | Purpose |
 |-------|----------|---------|
-| **Global** | `~/.cass-memory/traumas.jsonl` | Personal patterns across all projects |
+| **Global** | `~/.memory-system/traumas.jsonl` | Personal patterns across all projects |
 | **Project** | `.cass/traumas.jsonl` | Project-specific patterns (commit to repo) |
 
 Project patterns can be committed to your repository, creating shared team knowledge about dangerous operations specific to that codebase.
@@ -2341,10 +2341,10 @@ Each starter contains battle-tested rules with proper metadata:
 
 ### Creating Custom Starters
 
-Create YAML files in `~/.cass-memory/starters/`:
+Create YAML files in `~/.memory-system/starters/`:
 
 ```yaml
-# ~/.cass-memory/starters/django.yaml
+# ~/.memory-system/starters/django.yaml
 name: django
 description: Django web framework best practices
 bullets:
@@ -2560,7 +2560,7 @@ cm context "test" --json  # Check degraded field
 **Corrupted playbook:**
 ```bash
 # 1. Check for backup
-ls ~/.cass-memory/playbook.yaml.backup.*
+ls ~/.memory-system/playbook.yaml.backup.*
 
 # 2. Run doctor to diagnose
 cm doctor

@@ -49,7 +49,7 @@ function captureConsole() {
 }
 
 describe("E2E: CLI init command", () => {
-  describe("Global Init (~/.cass-memory)", () => {
+  describe("Global Init (~/.memory-system)", () => {
     it.serial("creates global structure in fresh environment", async () => {
       const log = createE2ELogger("cli-init: creates global structure (fresh)");
       log.setRepro("bun test test/cli-init.e2e.test.ts");
@@ -234,7 +234,7 @@ describe("E2E: CLI init command", () => {
         const payload = JSON.parse(output);
 
         expect(payload.success).toBe(true);
-        expect(payload.data.configPath).toContain(".cass-memory");
+        expect(payload.data.configPath).toContain(".memory-system");
         expect(Array.isArray(payload.data.created)).toBe(true);
       });
     });
@@ -580,54 +580,6 @@ describe("E2E: CLI init command", () => {
     });
   });
 
-  describe("Starter Seeds", () => {
-    it.serial("init with invalid --starter reports error", async () => {
-      await withTempCassHome(async (env) => {
-        await rm(env.cassMemoryDir, { recursive: true, force: true });
-
-        process.exitCode = 0;
-        const capture = captureConsole();
-        try {
-          await initCommand({ json: true, starter: "nonexistent-starter-xyz" });
-        } finally {
-          capture.restore();
-        }
-
-        const output = capture.logs.join("\n");
-        const payload = JSON.parse(output);
-        expect(payload.success).toBe(false);
-        expect(payload.error.code).toBe("VALIDATION_FAILED");
-        expect(payload.error.message).toContain("not found");
-      });
-    });
-  });
-
-  describe("Repo Init Starters", () => {
-    it.serial("repo init with invalid --starter reports error", async () => {
-      await withTempGitRepo(async (repoDir) => {
-        const originalCwd = process.cwd();
-        process.chdir(repoDir);
-
-        try {
-          process.exitCode = 0;
-          const capture = captureConsole();
-          try {
-            await initCommand({ repo: true, json: true, starter: "nonexistent-xyz" });
-          } finally {
-            capture.restore();
-          }
-
-          const output = capture.logs.join("\n");
-          const payload = JSON.parse(output);
-          expect(payload.success).toBe(false);
-          expect(payload.error.code).toBe("VALIDATION_FAILED");
-        } finally {
-          process.chdir(originalCwd);
-        }
-      });
-    });
-  });
-
   describe("Human Output", () => {
     it.serial("init shows human-readable success output", async () => {
       await withTempCassHome(async (env) => {
@@ -642,7 +594,7 @@ describe("E2E: CLI init command", () => {
 
         const output = capture.logs.join("\n");
         expect(output).toContain("Created");
-        expect(output).toContain(".cass-memory");
+        expect(output).toContain(".memory-system");
         expect(output).toContain("initialized successfully");
         expect(output).toContain("Next steps");
       });
@@ -798,124 +750,6 @@ describe("E2E: CLI init command", () => {
     });
   });
 
-  describe("Starter application", () => {
-    it.serial("init with valid starter applies it to playbook", async () => {
-      await withTempCassHome(async (env) => {
-        await rm(env.cassMemoryDir, { recursive: true, force: true });
-
-        const capture = captureConsole();
-        try {
-          // Use "general" starter which is a builtin
-          await initCommand({ json: true, starter: "general" });
-        } finally {
-          capture.restore();
-        }
-
-        const output = capture.logs.join("\n");
-        const payload = JSON.parse(output);
-        expect(payload.success).toBe(true);
-        expect(payload.data.starter).toBeDefined();
-        expect(payload.data.starter.name).toBe("general");
-        expect(typeof payload.data.starter.added).toBe("number");
-        expect(typeof payload.data.starter.skipped).toBe("number");
-      });
-    });
-
-    it.serial("init with starter shows human-readable starter outcome", async () => {
-      await withTempCassHome(async (env) => {
-        await rm(env.cassMemoryDir, { recursive: true, force: true });
-
-        const capture = captureConsole();
-        try {
-          await initCommand({ starter: "general" });
-        } finally {
-          capture.restore();
-        }
-
-        const output = capture.logs.join("\n");
-        expect(output).toContain("Applied starter");
-        expect(output).toContain("general");
-      });
-    });
-
-    it.serial("init --starter on already initialized playbook skips existing rules", async () => {
-      await withTempCassHome(async (env) => {
-        await rm(env.cassMemoryDir, { recursive: true, force: true });
-
-        // First init with starter
-        const capture1 = captureConsole();
-        try {
-          await initCommand({ json: true, starter: "general" });
-        } finally {
-          capture1.restore();
-        }
-
-        const output1 = capture1.logs.join("\n");
-        const payload1 = JSON.parse(output1);
-        const addedFirst = payload1.data.starter.added;
-
-        // Second init with same starter (should skip all)
-        const capture2 = captureConsole();
-        try {
-          await initCommand({ json: true, starter: "general" });
-        } finally {
-          capture2.restore();
-        }
-
-        const output2 = capture2.logs.join("\n");
-        const payload2 = JSON.parse(output2);
-        // Second time should skip most/all since they already exist
-        expect(payload2.data.starter.skipped).toBeGreaterThanOrEqual(addedFirst);
-      });
-    });
-
-    it.serial("repo init with valid starter applies it", async () => {
-      await withTempGitRepo(async (repoDir) => {
-        const originalCwd = process.cwd();
-        process.chdir(repoDir);
-
-        try {
-          const capture = captureConsole();
-          try {
-            await initCommand({ repo: true, json: true, starter: "general" });
-          } finally {
-            capture.restore();
-          }
-
-          const output = capture.logs.join("\n");
-          const payload = JSON.parse(output);
-          expect(payload.success).toBe(true);
-          expect(payload.data.starter).toBeDefined();
-          expect(payload.data.starter.name).toBe("general");
-        } finally {
-          process.chdir(originalCwd);
-        }
-      });
-    });
-
-    it.serial("repo init with starter shows human-readable outcome", async () => {
-      await withTempGitRepo(async (repoDir) => {
-        const originalCwd = process.cwd();
-        process.chdir(repoDir);
-
-        try {
-          const capture = captureConsole();
-          try {
-            await initCommand({ repo: true, starter: "general" });
-          } finally {
-            capture.restore();
-          }
-
-          const output = capture.logs.join("\n");
-          expect(output).toContain("Applied starter");
-          expect(output).toContain("general");
-        } finally {
-          process.chdir(originalCwd);
-        }
-      });
-    });
-  });
-
   describe("Force without confirmation", () => {
     it.serial("init --force without --yes in non-interactive mode returns error", async () => {
       await withTempCassHome(async (env) => {
@@ -981,24 +815,4 @@ describe("E2E: CLI init command", () => {
     });
   });
 
-  describe("seedStarter function", () => {
-    it.serial("seedStarter throws error for non-existent starter", async () => {
-      await withTempCassHome(async (env) => {
-        await rm(env.cassMemoryDir, { recursive: true, force: true });
-
-        const capture = captureConsole();
-        try {
-          await initCommand({ json: true, starter: "this-starter-does-not-exist-xyz" });
-        } finally {
-          capture.restore();
-        }
-
-        const output = capture.logs.join("\n");
-        const payload = JSON.parse(output);
-        expect(payload.success).toBe(false);
-        expect(payload.error.message).toContain("not found");
-        expect(payload.error.details.starter).toBe("this-starter-does-not-exist-xyz");
-      });
-    });
-  });
 });

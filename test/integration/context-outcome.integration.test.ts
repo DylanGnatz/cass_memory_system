@@ -30,7 +30,7 @@ describe("Integration: context logging + outcome feedback", () => {
   test("context logs rules and outcome backfills missing rulesUsed", async () => {
     await withTempEnv(async ({ home, repo }) => {
       // 1) Prepare global playbook with one bullet
-      const playbookPath = path.join(home, ".cass-memory", "playbook.yaml");
+      const playbookPath = path.join(home, ".memory-system", "playbook.yaml");
       await fs.mkdir(path.dirname(playbookPath), { recursive: true });
       const pb = createEmptyPlaybook("test");
       pb.bullets.push({

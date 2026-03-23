@@ -117,8 +117,6 @@ describe("cm.ts CLI router (unit)", () => {
       "forget",
       "audit",
       "project",
-      "starters",
-      "quickstart",
       "privacy",
       "serve",
       "outcome",

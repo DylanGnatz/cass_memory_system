@@ -111,7 +111,7 @@ describe("E2E: CLI doctor command", () => {
       // Core categories that should always be present
       expect(categories).toContain("Cass Integration");
       expect(categories).toContain("LLM Configuration");
-      expect(categories).toContain("Global Storage (~/.cass-memory)");
+      expect(categories).toContain("Global Storage (~/.memory-system)");
     });
 
     it("outputs human-readable format without --json", async () => {
@@ -195,7 +195,7 @@ describe("E2E: CLI doctor command", () => {
       const originalHome = process.env.HOME;
 
       try {
-        // Set HOME to empty directory (no .cass-memory)
+        // Set HOME to empty directory (no .memory-system)
         process.env.HOME = home;
         await mkdir(home, { recursive: true });
 
@@ -214,7 +214,7 @@ describe("E2E: CLI doctor command", () => {
     it("detects missing playbook when global dir exists", async () => {
       const dir = await createTempDir();
       const home = path.join(dir, "home");
-      const cassMemoryDir = path.join(home, ".cass-memory");
+      const cassMemoryDir = path.join(home, ".memory-system");
       const originalHome = process.env.HOME;
 
       try {
@@ -236,7 +236,7 @@ describe("E2E: CLI doctor command", () => {
     it("detects missing diary directory", async () => {
       const dir = await createTempDir();
       const home = path.join(dir, "home");
-      const cassMemoryDir = path.join(home, ".cass-memory");
+      const cassMemoryDir = path.join(home, ".memory-system");
       const originalHome = process.env.HOME;
 
       try {
@@ -262,7 +262,7 @@ describe("E2E: CLI doctor command", () => {
     it("applyFixes with dryRun does not create files", async () => {
       const dir = await createTempDir();
       const home = path.join(dir, "home");
-      const cassMemoryDir = path.join(home, ".cass-memory");
+      const cassMemoryDir = path.join(home, ".memory-system");
       const originalHome = process.env.HOME;
 
       try {
@@ -293,7 +293,7 @@ describe("E2E: CLI doctor command", () => {
     it("applyFixes creates missing directories", async () => {
       const dir = await createTempDir();
       const home = path.join(dir, "home");
-      const cassMemoryDir = path.join(home, ".cass-memory");
+      const cassMemoryDir = path.join(home, ".memory-system");
       const originalHome = process.env.HOME;
 
       try {
@@ -524,7 +524,7 @@ describe("E2E: CLI doctor command", () => {
     it("warns when sanitization is disabled", async () => {
       const dir = await createTempDir();
       const home = path.join(dir, "home");
-      const cassMemoryDir = path.join(home, ".cass-memory");
+      const cassMemoryDir = path.join(home, ".memory-system");
       const originalHome = process.env.HOME;
 
       try {
@@ -611,7 +611,7 @@ describe("E2E: CLI doctor command", () => {
       try {
         process.env.HOME = home;
         await mkdir(home, { recursive: true });
-        // No .cass-memory means warnings will be generated
+        // No .memory-system means warnings will be generated
 
         const capture = captureConsole();
         try {
@@ -650,7 +650,7 @@ describe("E2E: CLI doctor command", () => {
     it("--fix does nothing when system is healthy", async () => {
       const dir = await createTempDir();
       const home = path.join(dir, "home");
-      const cassMemoryDir = path.join(home, ".cass-memory");
+      const cassMemoryDir = path.join(home, ".memory-system");
       const originalHome = process.env.HOME;
 
       try {

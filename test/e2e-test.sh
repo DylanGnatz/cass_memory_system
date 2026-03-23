@@ -5,7 +5,7 @@ set -euo pipefail
 CM_BIN="./src/cm.ts"
 RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cm-e2e-XXXXXX")"
 export HOME="$RUN_DIR/home"
-mkdir -p "$HOME/.cass-memory"
+mkdir -p "$HOME/.memory-system"
 
 # Force degraded mode (no cass, no LLM)
 export CASS_PATH="__missing__"
@@ -27,7 +27,7 @@ run_step() {
 
 # 1) init
 run_step init bun run "$CM_BIN" init
-test -f "$HOME/.cass-memory/config.json"
+test -f "$HOME/.memory-system/config.json"
 
 # 2) stats empty
 run_step stats-empty bun run "$CM_BIN" stats --json

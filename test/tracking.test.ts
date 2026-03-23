@@ -12,7 +12,7 @@ import os from "node:os";
 describe("getProcessedLogPath", () => {
   it("returns global log path when workspace is undefined", () => {
     const home = process.env.HOME || os.homedir();
-    const expected = join(home, ".cass-memory", "reflections", "global.processed.log");
+    const expected = join(home, ".memory-system", "reflections", "global.processed.log");
     expect(getProcessedLogPath()).toBe(expected);
   });
 
@@ -20,7 +20,7 @@ describe("getProcessedLogPath", () => {
     const home = process.env.HOME || os.homedir();
     const workspace = "/tmp/my-workspace";
     const hash = crypto.createHash("sha256").update(workspace).digest("hex").slice(0, 8);
-    const expected = join(home, ".cass-memory", "reflections", `ws-${hash}.processed.log`);
+    const expected = join(home, ".memory-system", "reflections", `ws-${hash}.processed.log`);
     expect(getProcessedLogPath(workspace)).toBe(expected);
   });
 
@@ -30,7 +30,7 @@ describe("getProcessedLogPath", () => {
     const expanded = workspace.replace(/^~(?=$|\/)/, home);
     const normalized = resolve(expanded);
     const hash = crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 8);
-    const expected = join(home, ".cass-memory", "reflections", `ws-${hash}.processed.log`);
+    const expected = join(home, ".memory-system", "reflections", `ws-${hash}.processed.log`);
     expect(getProcessedLogPath(workspace)).toBe(expected);
   });
 

@@ -322,10 +322,10 @@ cm playbook bootstrap react    # Apply to existing playbook
 
 ### Custom Starters
 
-Create YAML files in `~/.cass-memory/starters/`:
+Create YAML files in `~/.memory-system/starters/`:
 
 ```yaml
-# ~/.cass-memory/starters/django.yaml
+# ~/.memory-system/starters/django.yaml
 name: django
 description: Django web framework best practices
 bullets:
@@ -420,7 +420,7 @@ Session History              Trauma Registry              Runtime Guard
 
 | Scope | Location | Purpose |
 |-------|----------|---------|
-| **Global** | `~/.cass-memory/traumas.jsonl` | Personal patterns |
+| **Global** | `~/.memory-system/traumas.jsonl` | Personal patterns |
 | **Project** | `.cass/traumas.jsonl` | Commit to repo for team |
 
 ### Pattern Lifecycle
@@ -559,7 +559,7 @@ All commands support `--json` for machine-readable output.
 
 ## Configuration
 
-Config lives at `~/.cass-memory/config.json` (global) and `.cass/config.json` (repo).
+Config lives at `~/.memory-system/config.json` (global) and `.cass/config.json` (repo).
 
 **Precedence:** CLI flags > Repo config > Global config > Defaults
 
@@ -613,7 +613,7 @@ Config lives at `~/.cass-memory/config.json` (global) and `.cass/config.json` (r
 ## Data Locations
 
 ```
-~/.cass-memory/                  # Global (user-level)
+~/.memory-system/                  # Global (user-level)
 ├── config.json                  # Configuration
 ├── playbook.yaml                # Personal playbook
 ├── diary/                       # Session summaries
@@ -640,7 +640,7 @@ Config lives at `~/.cass-memory/config.json` (global) and `.cass/config.json` (r
 
 ```bash
 # Daily at 2am
-0 2 * * * /usr/local/bin/cm reflect --days 7 >> ~/.cass-memory/reflect.log 2>&1
+0 2 * * * /usr/local/bin/cm reflect --days 7 >> ~/.memory-system/reflect.log 2>&1
 ```
 
 ### Claude Code Hook

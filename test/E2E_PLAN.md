@@ -16,7 +16,7 @@
   4) `cm mark <bullet-id> --helpful --session smoke-1`
   5) `cm playbook list --json`
 - Assertions:
-  - Playbook file created under `~/.cass-memory/playbook.yaml`.
+  - Playbook file created under `~/.memory-system/playbook.yaml`.
   - Context runs in degraded mode message (no cass).
   - Bullet appears in list; helpful count increments.
   - All commands exit 0.
@@ -25,7 +25,7 @@
 ### S2: Reflect/Validate/Curate Pipeline (fixture-backed)
 - Preconditions: Provide fixture cass export files; run in temp HOME/workspace.
 - Steps:
-  1) Seed diary fixture(s) under `~/.cass-memory/diary/`.
+  1) Seed diary fixture(s) under `~/.memory-system/diary/`.
   2) `cm reflect --session <fixture>` (dry-run then apply).
   3) `cm validate "Proposed rule text"` (can be stubbed to local check).
   4) `cm playbook list --json`.

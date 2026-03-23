@@ -73,10 +73,10 @@ describe("E2E: New User Onboarding", () => {
       () => {
         logger.info("Starting complete onboarding flow test");
 
-        // Step 1: Verify fresh environment (no .cass-memory)
-        const cassMemoryDir = join(testDir, ".cass-memory");
+        // Step 1: Verify fresh environment (no .memory-system)
+        const cassMemoryDir = join(testDir, ".memory-system");
         expect(existsSync(cassMemoryDir)).toBe(false);
-        logger.info("Step 1: Verified fresh environment - no .cass-memory exists");
+        logger.info("Step 1: Verified fresh environment - no .memory-system exists");
 
         // Step 2: Run init
         const initResult = runCm(["init", "--json"], testDir);

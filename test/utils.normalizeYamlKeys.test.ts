@@ -11,7 +11,7 @@ describe("normalizeYamlKeys", () => {
       },
       playbook_paths: [
         { repo_path: "/repo/.cass/playbook.yaml" },
-        { global_path: "~/.cass-memory/playbook.yaml" }
+        { global_path: "~/.memory-system/playbook.yaml" }
       ]
     };
 
@@ -25,7 +25,7 @@ describe("normalizeYamlKeys", () => {
       },
       playbookPaths: [
         { repoPath: "/repo/.cass/playbook.yaml" },
-        { globalPath: "~/.cass-memory/playbook.yaml" }
+        { globalPath: "~/.memory-system/playbook.yaml" }
       ]
     });
   });
@@ -46,7 +46,7 @@ describe("camelToSnakeKeys (inverse)", () => {
       },
       playbookPaths: [
         { repoPath: "/repo/.cass/playbook.yaml" },
-        { globalPath: "~/.cass-memory/playbook.yaml" }
+        { globalPath: "~/.memory-system/playbook.yaml" }
       ]
     };
 
@@ -60,7 +60,7 @@ describe("camelToSnakeKeys (inverse)", () => {
       },
       playbook_paths: [
         { repo_path: "/repo/.cass/playbook.yaml" },
-        { global_path: "~/.cass-memory/playbook.yaml" }
+        { global_path: "~/.memory-system/playbook.yaml" }
       ]
     });
   });

@@ -4,7 +4,6 @@ import { loadConfig, getSanitizeConfig } from "../config.js";
 import { sanitize } from "../sanitize.js";
 import { loadMergedPlaybook, getActiveBullets } from "../playbook.js";
 import { safeCassSearchWithDegraded } from "../cass.js";
-import { loadTraumas, findMatchingTrauma } from "../trauma.js";
 import {
   extractKeywords,
   scoreBulletRelevance,
@@ -417,7 +416,7 @@ async function appendContextLog(entry: {
 
     const logPath = repoLog
       ? repoLog
-      : expandPath("~/.cass-memory/context-log.jsonl");
+      : expandPath("~/.memory-system/context-log.jsonl");
 
     await ensureDir(path.dirname(logPath));
 
@@ -550,39 +549,6 @@ export async function contextCommand(
     return;
   }
   const normalizedTask = taskCheck.value;
-
-  // === TRAUMA CHECK (Pain Injection) ===
-  let traumaWarning: ContextResult["traumaWarning"] | undefined;
-  try {
-    const traumas = await loadTraumas();
-    const traumaMatch = findMatchingTrauma(normalizedTask, traumas);
-    
-    if (traumaMatch) {
-      const msg = traumaMatch.trigger_event.human_message || "You previously caused a catastrophe with this pattern.";
-      const ref = traumaMatch.trigger_event.session_path;
-      
-      // VISCERAL SCREAM TO STDERR (Always visible)
-      const mark = iconPrefix("warning").trim();
-      const marks = mark ? mark.repeat(3) : "";
-      const banner = marks
-        ? `${marks} CRITICAL WARNING: VISCERAL SAFETY INTERVENTION ${marks}`
-        : "CRITICAL WARNING: VISCERAL SAFETY INTERVENTION";
-      console.error(chalk.bgRed.white.bold(`\n${banner}`));
-      console.error(chalk.red.bold(`You are inquiring about a pattern that has previously caused TRAUMA.`));
-      console.error(chalk.red(`Pattern: ${traumaMatch.pattern}`));
-      console.error(chalk.red(`Reason:  ${msg}`));
-      console.error(chalk.red(`Ref:     ${ref}`));
-      console.error(chalk.bgRed.white.bold("DO NOT PROCEED WITHOUT EXTREME CAUTION.\n"));
-      
-      traumaWarning = {
-        pattern: traumaMatch.pattern,
-        reason: msg,
-        reference: ref
-      };
-    }
-  } catch (e) {
-    // Non-blocking
-  }
 
   const limitCheck = validatePositiveInt(flags.limit, "limit", { min: 1, allowUndefined: true });
   if (!limitCheck.ok) {
@@ -751,11 +717,6 @@ export async function contextCommand(
         }
       },
     });
-
-    // Merge trauma warning
-    if (traumaWarning) {
-      result.traumaWarning = traumaWarning;
-    }
 
   if (wantsJson || wantsToon) {
     printStructuredResult(command, result, normalizedFlags, { startedAtMs });

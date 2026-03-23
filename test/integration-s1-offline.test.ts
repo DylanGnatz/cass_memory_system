@@ -40,9 +40,9 @@ describe("S1 Offline Smoke (no cass, no LLM)", () => {
   };
 
   beforeAll(() => {
-    // Ensure ~/.cass-memory does not exist before running
+    // Ensure ~/.memory-system does not exist before running
     try {
-      rmSync(path.join(tmpRoot, ".cass-memory"), { recursive: true, force: true });
+      rmSync(path.join(tmpRoot, ".memory-system"), { recursive: true, force: true });
     } catch {
       // ignore
     }

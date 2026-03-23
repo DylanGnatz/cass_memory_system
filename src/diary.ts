@@ -60,7 +60,7 @@ async function appendCrossAgentAuditLog(
     // Fall back to global log if not in repo or repo-level logging disabled (policy)
     const logPath = repoLog
       ? repoLog
-      : expandPath("~/.cass-memory/privacy-audit.jsonl");
+      : expandPath("~/.memory-system/privacy-audit.jsonl");
 
     await ensureDir(path.dirname(logPath));
 

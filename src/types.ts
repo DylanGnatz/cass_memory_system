@@ -304,8 +304,8 @@ export const ScoringConfigSectionSchema = z.object({
 export type ScoringConfigSection = z.infer<typeof ScoringConfigSectionSchema>;
 
 export const BudgetConfigSchema = z.object({
-  dailyLimit: z.number().default(0.10),
-  monthlyLimit: z.number().default(2.00),
+  dailyLimit: z.number().default(0.50),
+  monthlyLimit: z.number().default(10.00),
   warningThreshold: z.number().default(80),
   currency: z.string().default("USD")
 });
@@ -371,8 +371,8 @@ export const ConfigSchema = z.object({
   model: z.string().default("claude-sonnet-4-20250514"),
   cassPath: z.string().default("cass"),
   remoteCass: RemoteCassConfigSchema.default({}),
-  playbookPath: z.string().default("~/.cass-memory/playbook.yaml"),
-  diaryDir: z.string().default("~/.cass-memory/diary"),
+  playbookPath: z.string().default("~/.memory-system/playbook.yaml"),
+  diaryDir: z.string().default("~/.memory-system/diary"),
   scoring: ScoringConfigSectionSchema.default({}),
   maxReflectorIterations: z.number().default(3),
   autoReflect: z.boolean().default(false),
@@ -401,7 +401,7 @@ export const ConfigSchema = z.object({
   maxRelatedSessions: z.number().default(5),
   validationEnabled: z.boolean().default(true),
   crossAgent: CrossAgentConfigSchema.default({}),
-  semanticSearchEnabled: z.boolean().default(false),
+  semanticSearchEnabled: z.boolean().default(true),
   semanticWeight: z.number().min(0).max(1).default(0.6),
   embeddingModel: z.string().default("Xenova/all-MiniLM-L6-v2"),
   verbose: z.boolean().default(false),
@@ -410,7 +410,22 @@ export const ConfigSchema = z.object({
   baseUrl: z.string().optional(),
   ollamaBaseUrl: z.string().default("http://localhost:11434"),
   sanitization: SanitizationConfigSchema.default({}),
-  budget: BudgetConfigSchema.default({})
+  budget: BudgetConfigSchema.default({}),
+
+  // Memory system directories and paths (Phase 1)
+  sessionNotesDir: z.string().default("~/.memory-system/session-notes"),
+  knowledgeDir: z.string().default("~/.memory-system/knowledge"),
+  digestsDir: z.string().default("~/.memory-system/digests"),
+  notesDir: z.string().default("~/.memory-system/notes"),
+  searchDbPath: z.string().default("~/.memory-system/search.db"),
+  stateJsonPath: z.string().default("~/.memory-system/state.json"),
+  topicsJsonPath: z.string().default("~/.memory-system/topics.json"),
+
+  // Memory system tuning
+  periodicJobIntervalHours: z.number().default(4),
+  knowledgePageBloatThreshold: z.number().default(5000),
+  staleTopicIgnoreDays: z.number().default(30),
+  transcriptRetentionDays: z.number().default(30),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
@@ -888,6 +903,149 @@ export const EXIT_CODES = {
 } as const;
 export type ExitCode = typeof EXIT_CODES[keyof typeof EXIT_CODES];
 
+// ============================================================================
+// KNOWLEDGE SYSTEM TYPES (Phase 1 — Memory System Fork)
+// ============================================================================
+
+export const ConfidenceTierEnum = z.enum(["verified", "inferred", "uncertain"]);
+export type ConfidenceTier = z.infer<typeof ConfidenceTierEnum>;
+
+export const TopicSourceEnum = z.enum(["user", "system"]);
+export type TopicSource = z.infer<typeof TopicSourceEnum>;
+
+// --- Topic ---
+
+export const TopicSchema = z.object({
+  slug: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string(),
+  source: TopicSourceEnum,
+  created: z.string(), // ISO 8601
+});
+export type Topic = z.infer<typeof TopicSchema>;
+
+export const TopicsFileSchema = z.object({
+  topics: z.array(TopicSchema),
+});
+export type TopicsFile = z.infer<typeof TopicsFileSchema>;
+
+// --- Session Note (frontmatter, content is markdown) ---
+
+export const SessionNoteSchema = z.object({
+  id: z.string().min(1),
+  source_session: z.string(),
+  last_offset: z.number().default(0),
+  created: z.string(), // ISO 8601
+  last_updated: z.string(), // ISO 8601
+  abstract: z.string(),
+  topics_touched: z.array(z.string()).default([]),
+  processed: z.boolean().default(false),
+  user_edited: z.boolean().default(false),
+});
+export type SessionNote = z.infer<typeof SessionNoteSchema>;
+
+// --- Knowledge Page (frontmatter, sections are markdown with metadata comments) ---
+
+export const KnowledgePageSchema = z.object({
+  topic: z.string().min(1),
+  description: z.string(),
+  source: TopicSourceEnum,
+  created: z.string(), // ISO 8601
+  last_updated: z.string(), // ISO 8601
+});
+export type KnowledgePage = z.infer<typeof KnowledgePageSchema>;
+
+// --- Daily Digest (frontmatter, content is markdown) ---
+
+export const DailyDigestSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  sessions: z.number().int().nonnegative(),
+  topics_touched: z.array(z.string()).default([]),
+});
+export type DailyDigest = z.infer<typeof DailyDigestSchema>;
+
+// --- User Note (frontmatter, content is user-authored markdown) ---
+
+export const UserNoteSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  created: z.string(), // ISO 8601
+  topics: z.array(z.string()).default([]),
+  ingest: z.boolean().default(false),
+  starred: z.boolean().default(false),
+});
+export type UserNote = z.infer<typeof UserNoteSchema>;
+
+// --- Topic Suggestion ---
+
+export const TopicSuggestionSchema = z.object({
+  slug: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string(),
+  source: z.literal("system"),
+  created: z.string(), // ISO 8601
+  suggested_from_session: z.string(),
+});
+export type TopicSuggestion = z.infer<typeof TopicSuggestionSchema>;
+
+// --- Knowledge Page Delta (Curator operations) ---
+
+export const KnowledgePageAppendDeltaSchema = z.object({
+  type: z.literal("knowledge_page_append"),
+  topic_slug: z.string().min(1),
+  section_id: z.string().min(1),
+  section_title: z.string(),
+  content: z.string(),
+  confidence: ConfidenceTierEnum,
+  source_session: z.string(),
+  added_date: z.string(), // ISO 8601
+  related_bullets: z.array(z.string()).default([]),
+});
+export type KnowledgePageAppendDelta = z.infer<typeof KnowledgePageAppendDeltaSchema>;
+
+export const DigestUpdateDeltaSchema = z.object({
+  type: z.literal("digest_update"),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  content: z.string(),
+  sessions_covered: z.array(z.string()),
+});
+export type DigestUpdateDelta = z.infer<typeof DigestUpdateDeltaSchema>;
+
+export const TopicSuggestionDeltaSchema = z.object({
+  type: z.literal("topic_suggestion"),
+  slug: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string(),
+  suggested_from_session: z.string(),
+});
+export type TopicSuggestionDelta = z.infer<typeof TopicSuggestionDeltaSchema>;
+
+export const KnowledgeDeltaSchema = z.discriminatedUnion("type", [
+  KnowledgePageAppendDeltaSchema,
+  DigestUpdateDeltaSchema,
+  TopicSuggestionDeltaSchema,
+]);
+export type KnowledgeDelta = z.infer<typeof KnowledgeDeltaSchema>;
+
+// --- Processing State (state.json) ---
+
+export const SessionProcessingStateSchema = z.object({
+  last_offset: z.number().default(0),
+  last_processed: z.string(), // ISO 8601
+});
+export type SessionProcessingState = z.infer<typeof SessionProcessingStateSchema>;
+
+export const ProcessingStateSchema = z.object({
+  sessions: z.record(z.string(), SessionProcessingStateSchema).default({}),
+  lastReflectionRun: z.string().optional(),
+  lastIndexUpdate: z.string().optional(),
+});
+export type ProcessingState = z.infer<typeof ProcessingStateSchema>;
+
+// ============================================================================
+// SCHEMA REGISTRY
+// ============================================================================
+
 export const Schemas = {
   FeedbackEvent: FeedbackEventSchema,
   PlaybookBullet: PlaybookBulletSchema,
@@ -902,5 +1060,15 @@ export const Schemas = {
   PlaybookStats: PlaybookStatsSchema,
   ReflectionStats: ReflectionStatsSchema,
   CommandResult: CommandResultSchema,
-  AuditResult: AuditResultSchema
+  AuditResult: AuditResultSchema,
+  // Knowledge system (Phase 1)
+  Topic: TopicSchema,
+  TopicsFile: TopicsFileSchema,
+  SessionNote: SessionNoteSchema,
+  KnowledgePage: KnowledgePageSchema,
+  DailyDigest: DailyDigestSchema,
+  UserNote: UserNoteSchema,
+  TopicSuggestion: TopicSuggestionSchema,
+  KnowledgeDelta: KnowledgeDeltaSchema,
+  ProcessingState: ProcessingStateSchema,
 } as const;

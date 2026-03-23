@@ -666,7 +666,7 @@ export function getSemanticStatus(config: {
       enabled: false,
       available: false,
       reason: "Semantic search is disabled in config",
-      enableHint: "Set semanticSearchEnabled: true in ~/.cass-memory/config.yaml",
+      enableHint: "Set semanticSearchEnabled: true in ~/.memory-system/config.yaml",
       model,
     };
   }

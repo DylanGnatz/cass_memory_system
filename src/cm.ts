@@ -16,8 +16,6 @@ import { projectCommand } from "./commands/project.js";
 import { serveCommand } from "./commands/serve.js";
 import { outcomeCommand, applyOutcomeLogCommand } from "./commands/outcome.js";
 import { usageCommand } from "./commands/usage.js";
-import { startersCommand } from "./commands/starters.js";
-import { quickstartCommand } from "./commands/quickstart.js";
 import { topCommand } from "./commands/top.js";
 import { staleCommand } from "./commands/stale.js";
 import { whyCommand } from "./commands/why.js";
@@ -25,8 +23,6 @@ import { undoCommand } from "./commands/undo.js";
 import { privacyCommand } from "./commands/privacy.js";
 import { similarCommand } from "./commands/similar.js";
 import { onboardCommand } from "./commands/onboard.js";
-import { guardCommand } from "./commands/guard.js";
-import { traumaCommand } from "./commands/trauma.js";
 import { infoCommand } from "./info.js";
 import { examplesCommand } from "./examples.js";
 
@@ -77,11 +73,9 @@ program.command("init")
   .option("--repo", "Initialize repo-level .cass/ directory structure")
   .option("-j, --json", "Output JSON")
   .option("--no-interactive", "Disable interactive prompts")
-  .option("--starter <name>", "Seed the playbook with a starter rule set")
   .addHelpText("after", () =>
     formatCommandExamples([
       "init",
-      "init --starter typescript",
       "init --repo",
       "init --force --yes --json",
     ])
@@ -504,15 +498,12 @@ program.command("forget")
 program.command("audit")
   .description("Audit recent sessions against playbook rules")
   .option("--days <n>", "Lookback days for sessions", toInt)
-  .option("--trauma", "Scan cass history for catastrophic patterns (Project Hot Stove)")
   .option("-j, --json", "Output JSON")
   .addHelpText("after", () =>
     formatCommandExamples([
       "audit --days 30",
       "audit --days 14 --json",
       "audit --json",
-      "audit --trauma --days 90",
-      "audit --trauma --days 30 --json",
     ])
   )
   .action(async (opts: any) => await auditCommand(opts));
@@ -536,32 +527,6 @@ program.command("project")
     ])
   )
   .action(async (opts: any) => await projectCommand(opts));
-
-// --- Starters ---
-program.command("starters")
-  .description("List available starter playbooks")
-  .option("-j, --json", "Output JSON")
-  .addHelpText("after", () =>
-    formatCommandExamples([
-      "starters",
-      "starters --json",
-      "init --starter typescript",
-    ])
-  )
-  .action(async (opts: any) => await startersCommand(opts));
-
-// --- Quickstart (agent self-documentation) ---
-program.command("quickstart")
-  .description("Explain the system to an agent (self-documentation)")
-  .option("-j, --json", "Output JSON")
-  .addHelpText("after", () =>
-    formatCommandExamples([
-      "quickstart",
-      "quickstart --json",
-      "quickstart --json > quickstart.json",
-    ])
-  )
-  .action(async (opts: any) => await quickstartCommand(opts));
 
 // --- Privacy ---
 const privacy = program.command("privacy")
@@ -807,75 +772,6 @@ onboard.command("reset")
   )
   .action(async (opts: any) => await onboardCommand({ ...opts, reset: true }));
 
-// --- Guard (Project Hot Stove Safety) ---
-program.command("guard")
-  .description("Manage mechanical safety guards (Project Hot Stove)")
-  .option("--install", "Install trauma guard hook to .claude/hooks")
-  .option("--git", "Install git pre-commit hook to block dangerous patterns")
-  .option("-j, --json", "Output JSON")
-  .addHelpText("after", () =>
-    formatCommandExamples([
-      "guard --install          # Claude Code hook",
-      "guard --git              # Git pre-commit hook",
-      "guard --install --json",
-    ])
-  )
-  .action(async (opts: any) => await guardCommand(opts));
-
-// --- Trauma (Scar Management) ---
-const trauma = program.command("trauma")
-  .description("Manage Project Hot Stove traumas (scars)")
-  .addHelpText("after", () =>
-    formatCommandExamples([
-      "trauma list",
-      "trauma add \"^rm -rf\" --severity FATAL",
-      "trauma heal trauma-abc123",
-      "trauma remove trauma-abc123 --force",
-      "trauma import ./traumas.txt --scope global",
-    ])
-  );
-
-trauma.command("list")
-  .alias("ls")
-  .description("List active traumas")
-  .option("-j, --json", "Output JSON")
-  .action(async (opts: any) => await traumaCommand("list", [], opts));
-
-trauma.command("add")
-  .description("Manually add a trauma pattern")
-  .argument("<pattern>", "Regex pattern to block")
-  .option("--severity <level>", "CRITICAL or FATAL", "CRITICAL")
-  .option("--scope <scope>", "global or project", "global")
-  .option("--message <msg>", "Human-readable reason")
-  .option("-j, --json", "Output JSON")
-  .action(async (pattern: string, opts: any) => await traumaCommand("add", [pattern], opts));
-
-trauma.command("heal")
-  .description("Heal (disable) a trauma by id")
-  .argument("<id>", "Trauma id (e.g., trauma-abc123)")
-  .option("--scope <scope>", "global | project | all", "all")
-  .option("-j, --json", "Output JSON")
-  .action(async (id: string, opts: any) => await traumaCommand("heal", [id], opts));
-
-trauma.command("remove")
-  .alias("rm")
-  .description("Remove a trauma entry by id (requires --force)")
-  .argument("<id>", "Trauma id (e.g., trauma-abc123)")
-  .option("--scope <scope>", "global | project | all", "all")
-  .option("--force", "Required: confirm removal")
-  .option("--yes", "Skip interactive confirmation (still requires --force)")
-  .option("-j, --json", "Output JSON")
-  .action(async (id: string, opts: any) => await traumaCommand("remove", [id], opts));
-
-trauma.command("import")
-  .description("Bulk import trauma patterns/entries from a file")
-  .argument("<file>", "Path to a file containing patterns or JSONL entries")
-  .option("--scope <scope>", "global or project", "global")
-  .option("--severity <level>", "CRITICAL or FATAL (default: CRITICAL)", "CRITICAL")
-  .option("--message <msg>", "Human-readable reason (applied to imported entries)")
-  .option("-j, --json", "Output JSON")
-  .action(async (file: string, opts: any) => await traumaCommand("import", [file], opts));
-
 program.showSuggestionAfterError(true);
 if (!hasJsonFlag(argv)) {
   program.showHelpAfterError("(add --help for additional information)");
@@ -919,8 +815,6 @@ export function hasJsonFlag(argv: string[] = process.argv): boolean {
     "forget",
     "audit",
     "project",
-    "starters",
-    "quickstart",
     "privacy",
     "serve",
     "outcome",
@@ -1031,9 +925,6 @@ function formatMainHelpBanner(cli: string): string {
   return [
     "Start here (agents):",
     `  ${cli} context \"<task>\" --json`,
-    "",
-    "Then:",
-    `  ${cli} quickstart --json`,
   ].join("\n");
 }
 
@@ -1054,8 +945,8 @@ Global options:
   --verbose        Enable verbose diagnostics
 
 Command groups:
-  Agent workflow: context, quickstart, similar
-  Operator/maintenance: init, doctor, reflect, playbook, stats, project, privacy, starters
+  Agent workflow: context, similar
+  Operator/maintenance: init, doctor, reflect, playbook, stats, project, privacy
   Advanced/rare: serve, outcome, outcome-apply, audit, validate
 
 Tip: ${cli} <command> --help

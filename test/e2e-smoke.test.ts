@@ -71,7 +71,7 @@ describe("E2E CLI Smoke Test", () => {
     expect(typeof payload.success).toBe("boolean");
 
     // Check files created
-    const cassMemoryDir = join(testDir, ".cass-memory");
+    const cassMemoryDir = join(testDir, ".memory-system");
     expect(existsSync(cassMemoryDir) || result.stdout.includes("initialized")).toBe(true);
   });
 
@@ -157,16 +157,6 @@ describe("E2E CLI Smoke Test", () => {
     const stale = JSON.parse(result.stdout);
     expect(stale.data?.threshold).toBe(0);
     expect(Array.isArray(stale.data?.bullets)).toBe(true);
-  });
-
-  test("cm quickstart shows agent documentation", () => {
-    const result = runCm(["quickstart", "--json"], testDir);
-
-    expect(result.exitCode).toBe(0);
-
-    const quickstart = JSON.parse(result.stdout);
-    expect(quickstart.data?.oneCommand).toContain("cm context");
-    expect(quickstart.data?.protocol).toBeDefined();
   });
 
   test("cm usage shows LLM cost tracking", () => {

@@ -166,14 +166,14 @@ export async function resolveOutcomeLogPath(): Promise<string> {
   const useRepoLog = repoDir ? await fileExists(repoDir) : false;
   if (useRepoLog) return path.join(repoDir!, "outcomes.jsonl");
 
-  return expandPath("~/.cass-memory/outcomes.jsonl");
+  return expandPath("~/.memory-system/outcomes.jsonl");
 }
 
 async function resolveContextLogPath(): Promise<string> {
   const repoDir = await resolveRepoDir();
   const useRepoLog = repoDir ? await fileExists(repoDir) : false;
   if (useRepoLog) return path.join(repoDir!, "context-log.jsonl");
-  return expandPath("~/.cass-memory/context-log.jsonl");
+  return expandPath("~/.memory-system/context-log.jsonl");
 }
 
 export async function recordOutcome(

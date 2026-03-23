@@ -91,7 +91,7 @@ export async function orchestrateReflection(
   const reflectionLockPath = `${logPath}.orchestrator`;
 
   // Ensure reflections directory exists before lock acquisition (fixes #14)
-  // Without this, the lock can fail on fresh installs where ~/.cass-memory/reflections/ doesn't exist
+  // Without this, the lock can fail on fresh installs where ~/.memory-system/reflections/ doesn't exist
   await ensureDir(path.dirname(reflectionLockPath));
 
   return withLock(reflectionLockPath, async () => {

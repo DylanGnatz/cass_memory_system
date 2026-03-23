@@ -66,7 +66,7 @@ export async function forgetCommand(
       // 1. Add to blocked log
       const blockedLogPath = savePath === repoPath
         ? path.join(path.dirname(repoPath!), "blocked.log")
-        : "~/.cass-memory/blocked.log";
+        : "~/.memory-system/blocked.log";
 
       await appendBlockedLog({
         id: bullet.id,

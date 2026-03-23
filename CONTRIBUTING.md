@@ -35,6 +35,6 @@
 
 ## 6) Architecture overview (quick)
 - Three-layer ACE pipeline: Generator (context) → Reflector (deltas) → Curator (deterministic merge).
-- Storage: playbook YAML in `~/.cass-memory/` and `.cass/` (repo-level); diaries in `~/.cass-memory/diary`.
+- Storage: playbook YAML in `~/.memory-system/` and `.cass/` (repo-level); diaries in `~/.memory-system/diary`.
 - CLI: `cm` (cass-memory) commands under `src/commands`.
 - Keep schemas single-sourced in `src/types.ts`; other modules must import from there to avoid drift.

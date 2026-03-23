@@ -513,7 +513,7 @@ cm diary /path/to/session.jsonl --enrich --json
 1. Load session via cass export
 2. Query cass for related sessions (cross-agent enrichment)
 3. LLM extraction of structured diary fields
-4. Save to ~/.cass-memory/diary/
+4. Save to ~/.memory-system/diary/
 
 ### Command: `reflect`
 
@@ -700,7 +700,7 @@ async function forgetBullet(
   }
 
   const logPath = options.global
-    ? "~/.cass-memory/toxic_bullets.log"
+    ? "~/.memory-system/toxic_bullets.log"
     : "./.cass/toxic.log";
 
   await appendToxicLog(logPath, toxicEntry);
@@ -883,7 +883,7 @@ cm doctor --fix  # Auto-fix recoverable issues
 │   ✓ 1,247 sessions indexed across 4 agents             │
 │                                                         │
 │ STORAGE                                                 │
-│   ✓ Data directory: ~/.cass-memory (42MB)              │
+│   ✓ Data directory: ~/.memory-system (42MB)              │
 │   ✓ Disk space available: 89GB                         │
 │   ✓ Playbook: 156 bullets (89 global, 67 workspace)    │
 │   ✓ Diary entries: 342                                  │
@@ -894,7 +894,7 @@ cm doctor --fix  # Auto-fix recoverable issues
 │   ✗ GOOGLE_API_KEY missing (optional)                  │
 │                                                         │
 │ CONFIGURATION                                           │
-│   ✓ Config valid: ~/.cass-memory/config.json           │
+│   ✓ Config valid: ~/.memory-system/config.json           │
 │   ✓ Provider: anthropic / claude-sonnet-4-20250514     │
 │                                                         │
 │ SELF-TEST                                               │
@@ -951,7 +951,7 @@ async function runDoctor(options: { fix?: boolean; json?: boolean }): Promise<He
   }
 
   // === STORAGE ===
-  const dataDir = expandPath("~/.cass-memory");
+  const dataDir = expandPath("~/.memory-system");
   if (await exists(dataDir)) {
     const size = await getDirSize(dataDir);
     checks.push({ category: "storage", name: "data_dir", status: "pass", message: `Data directory: ${dataDir} (${formatBytes(size)})` });
@@ -1863,7 +1863,7 @@ Generate a concise briefing that:
 
 ```
 # GLOBAL (User-level defaults)
-~/.cass-memory/
+~/.memory-system/
 ├── config.json              # User configuration
 ├── playbook.yaml            # Personal playbook (preferences, shortcuts)
 ├── toxic_bullets.log        # NEW: Permanently blocked patterns (see "forget")
@@ -1893,7 +1893,7 @@ When `cm context` runs, it merges playbooks in order:
 ```typescript
 async function loadMergedPlaybook(config: Config): Promise<Playbook> {
   // 1. Load global (user) playbook
-  const globalPlaybook = await loadPlaybook(expandPath("~/.cass-memory/playbook.yaml"));
+  const globalPlaybook = await loadPlaybook(expandPath("~/.memory-system/playbook.yaml"));
 
   // 2. Load repo playbook if in a git repo
   const repoPlaybook = await loadPlaybook("./.cass/playbook.yaml").catch(() => null);
@@ -1907,7 +1907,7 @@ async function loadMergedPlaybook(config: Config): Promise<Playbook> {
   });
 
   // 4. Filter out toxic bullets from both levels
-  const globalToxic = await loadToxicLog("~/.cass-memory/toxic_bullets.log");
+  const globalToxic = await loadToxicLog("~/.memory-system/toxic_bullets.log");
   const repoToxic = await loadToxicLog("./.cass/toxic.log");
   const allToxic = [...globalToxic, ...repoToxic];
 
@@ -2006,7 +2006,7 @@ async function scoreBulletsEnhanced(
 ### Embedding Cache
 
 ```typescript
-// ~/.cass-memory/embeddings/bullets.json
+// ~/.memory-system/embeddings/bullets.json
 interface EmbeddingCache {
   version: string;
   model: string;
@@ -2050,7 +2050,7 @@ async function loadOrComputeEmbeddings(
   "provider": "anthropic",
   "model": "claude-sonnet-4-20250514",
   "cassPath": "cass",
-  "playbookPath": "~/.cass-memory/playbook.yaml",
+  "playbookPath": "~/.memory-system/playbook.yaml",
   "maxReflectorIterations": 3,
   "dedupSimilarityThreshold": 0.85,
   "pruneHarmfulThreshold": 3,
@@ -2065,7 +2065,7 @@ async function loadOrComputeEmbeddings(
 ### Processed Log Format
 
 ```
-# ~/.cass-memory/reflections/global.processed.log
+# ~/.memory-system/reflections/global.processed.log
 # One entry per line: {id}\t{timestamp}\t{source}
 diary-abc123	2025-12-07T10:30:00Z	~/.claude/projects/app/session-001.jsonl
 diary-def456	2025-12-07T11:00:00Z	~/.cursor/state.vscdb:session-xyz
@@ -2411,8 +2411,8 @@ export const ConfigSchema = z.object({
   cassPath: z.string().default("cass"),
 
   // Paths
-  playbookPath: z.string().default("~/.cass-memory/playbook.yaml"),
-  diaryDir: z.string().default("~/.cass-memory/diary"),
+  playbookPath: z.string().default("~/.memory-system/playbook.yaml"),
+  diaryDir: z.string().default("~/.memory-system/diary"),
 
   // Reflection settings
   maxReflectorIterations: z.number().min(1).max(10).default(3),
@@ -3881,7 +3881,7 @@ function validateApiKey(provider: string): void {
     throw new Error(
       `Missing ${envVar} environment variable.\n` +
       `Set it with: export ${envVar}="your-api-key"\n` +
-      `Or add to ~/.cass-memory/config.json`
+      `Or add to ~/.memory-system/config.json`
     );
   }
 
@@ -4093,14 +4093,14 @@ async function withLock<T>(
   fn: () => Promise<T>,
   config: Config
 ): Promise<T> {
-  const lockDir = expandPath("~/.cass-memory");
+  const lockDir = expandPath("~/.memory-system");
   const lockResult = acquireLock(lockDir, operation);
 
   if (!lockResult.acquired) {
     throw new Error(
       `Another cass-memory process is running (PID ${lockResult.holder?.pid}, ` +
       `operation: ${lockResult.holder?.operation}). ` +
-      `Wait for it to finish or remove ~/.cass-memory/cass-memory.lock`
+      `Wait for it to finish or remove ~/.memory-system/cass-memory.lock`
     );
   }
 
@@ -4218,7 +4218,7 @@ async function checkStorageHealth(config: Config): Promise<{
   const warnings: string[] = [];
   const errors: string[] = [];
 
-  const baseDir = expandPath("~/.cass-memory");
+  const baseDir = expandPath("~/.memory-system");
 
   // Check directory exists and is writable
   try {
@@ -4428,7 +4428,7 @@ const PLATFORM = {
     if (this.isWindows) {
       return process.env.LOCALAPPDATA
         ? join(process.env.LOCALAPPDATA, "cass-memory")
-        : join(homedir(), ".cass-memory");
+        : join(homedir(), ".memory-system");
     }
     if (this.isMac) {
       return join(homedir(), "Library", "Application Support", "cass-memory");

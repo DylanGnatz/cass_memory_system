@@ -11,7 +11,7 @@ async function createTmpDir(prefix = "tracking-test-") {
 describe("getProcessedLogPath", () => {
   it("uses global path when workspace not provided", () => {
     const p = getProcessedLogPath();
-    expect(p.endsWith(path.join(".cass-memory", "reflections", "global.processed.log"))).toBeTrue();
+    expect(p.endsWith(path.join(".memory-system", "reflections", "global.processed.log"))).toBeTrue();
   });
 
   it("hashes workspace path into ws-<hash>.processed.log", () => {

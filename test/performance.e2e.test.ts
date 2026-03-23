@@ -97,7 +97,7 @@ function runCmAsync(args: string[], cwd: string, env: Record<string, string> = {
 }
 
 function patchCassPathToNonexistent(testDir: string): void {
-  const configPath = join(testDir, ".cass-memory", "config.json");
+  const configPath = join(testDir, ".memory-system", "config.json");
   const raw = readFileSync(configPath, "utf-8");
   const json = JSON.parse(raw) as any;
   json.cassPath = "__nonexistent__";
@@ -134,7 +134,7 @@ describe("E2E: Performance (Large Scale)", () => {
     patchCassPathToNonexistent(testDir);
     logger.endStep("init", true);
 
-    const cassMemoryDir = join(testDir, ".cass-memory");
+    const cassMemoryDir = join(testDir, ".memory-system");
     const playbookPath = join(cassMemoryDir, "playbook.yaml");
     const diaryDir = join(cassMemoryDir, "diary");
     expect(existsSync(diaryDir)).toBe(true);

@@ -63,7 +63,7 @@ async function setupTestEnvironment(options: {
 } = {}) {
   const dir = await createTempDir();
   const home = path.join(dir, "home");
-  const cassMemoryDir = path.join(home, ".cass-memory");
+  const cassMemoryDir = path.join(home, ".memory-system");
   const costDir = path.join(cassMemoryDir, "cost");
 
   await mkdir(costDir, { recursive: true });
@@ -72,8 +72,8 @@ async function setupTestEnvironment(options: {
   const config = {
     schema_version: 1,
     budget: {
-      dailyLimit: options.dailyLimit ?? 0.10,
-      monthlyLimit: options.monthlyLimit ?? 2.00
+      dailyLimit: options.dailyLimit ?? 0.50,
+      monthlyLimit: options.monthlyLimit ?? 10.00
     }
   };
   await writeFile(path.join(cassMemoryDir, "config.json"), JSON.stringify(config));
@@ -137,8 +137,8 @@ describe("E2E: CLI usage command", () => {
         dailyCost: 0.05,
         monthlyCost: 0.50,
         allTimeCost: 1.25,
-        dailyLimit: 0.10,
-        monthlyLimit: 2.00
+        dailyLimit: 0.50,
+        monthlyLimit: 10.00
       });
       const originalHome = process.env.HOME;
 
@@ -232,8 +232,8 @@ describe("E2E: CLI usage command", () => {
       const { home } = await setupTestEnvironment({
         dailyCost: 0.05,
         monthlyCost: 0.50,
-        dailyLimit: 0.10,
-        monthlyLimit: 2.00
+        dailyLimit: 0.50,
+        monthlyLimit: 10.00
       });
       const originalHome = process.env.HOME;
 
@@ -260,10 +260,10 @@ describe("E2E: CLI usage command", () => {
 
     it("displays percentage of budget used", async () => {
       const { home } = await setupTestEnvironment({
-        dailyCost: 0.05,
-        monthlyCost: 1.00,
-        dailyLimit: 0.10,
-        monthlyLimit: 2.00
+        dailyCost: 0.25,
+        monthlyCost: 5.00,
+        dailyLimit: 0.50,
+        monthlyLimit: 10.00
       });
       const originalHome = process.env.HOME;
 
@@ -278,7 +278,7 @@ describe("E2E: CLI usage command", () => {
         }
 
         const output = capture.logs.join("\n");
-        // Should show 50% for daily (0.05/0.10) and 50% for monthly (1.00/2.00)
+        // Should show 50% for daily (0.25/0.50) and 50% for monthly (5.00/10.00)
         expect(output).toContain("50.0%");
       } finally {
         process.env.HOME = originalHome;
@@ -311,10 +311,10 @@ describe("E2E: CLI usage command", () => {
   describe("Budget Warnings", () => {
     it("shows warning when daily limit is reached", async () => {
       const { home } = await setupTestEnvironment({
-        dailyCost: 0.12,  // Over the 0.10 limit
-        monthlyCost: 0.50,
-        dailyLimit: 0.10,
-        monthlyLimit: 2.00
+        dailyCost: 0.60,  // Over the 0.50 limit
+        monthlyCost: 2.00,
+        dailyLimit: 0.50,
+        monthlyLimit: 10.00
       });
       const originalHome = process.env.HOME;
 
@@ -338,9 +338,9 @@ describe("E2E: CLI usage command", () => {
     it("shows warning when monthly limit is reached", async () => {
       const { home } = await setupTestEnvironment({
         dailyCost: 0.05,
-        monthlyCost: 2.50,  // Over the 2.00 limit
-        dailyLimit: 0.10,
-        monthlyLimit: 2.00
+        monthlyCost: 12.00,  // Over the 10.00 limit
+        dailyLimit: 0.50,
+        monthlyLimit: 10.00
       });
       const originalHome = process.env.HOME;
 
@@ -365,8 +365,8 @@ describe("E2E: CLI usage command", () => {
       const { home } = await setupTestEnvironment({
         dailyCost: 0.02,
         monthlyCost: 0.50,
-        dailyLimit: 0.10,
-        monthlyLimit: 2.00
+        dailyLimit: 0.50,
+        monthlyLimit: 10.00
       });
       const originalHome = process.env.HOME;
 
@@ -394,7 +394,7 @@ describe("E2E: CLI usage command", () => {
         dailyCost: 0.05,
         monthlyCost: 0.50,
         dailyLimit: 0,
-        monthlyLimit: 2.00
+        monthlyLimit: 10.00
       });
       const originalHome = process.env.HOME;
 
@@ -420,7 +420,7 @@ describe("E2E: CLI usage command", () => {
       const { home } = await setupTestEnvironment({
         dailyCost: 0.05,
         monthlyCost: 0.50,
-        dailyLimit: 0.10,
+        dailyLimit: 0.50,
         monthlyLimit: 0
       });
       const originalHome = process.env.HOME;
@@ -448,7 +448,7 @@ describe("E2E: CLI usage command", () => {
     it("handles missing cost file gracefully", async () => {
       const dir = await createTempDir();
       const home = path.join(dir, "home");
-      const cassMemoryDir = path.join(home, ".cass-memory");
+      const cassMemoryDir = path.join(home, ".memory-system");
 
       await mkdir(cassMemoryDir, { recursive: true });
 
@@ -456,8 +456,8 @@ describe("E2E: CLI usage command", () => {
       const config = {
         schema_version: 1,
         budget: {
-          dailyLimit: 0.10,
-          monthlyLimit: 2.00
+          dailyLimit: 0.50,
+          monthlyLimit: 10.00
         }
       };
       await writeFile(path.join(cassMemoryDir, "config.json"), JSON.stringify(config));
@@ -489,15 +489,15 @@ describe("E2E: CLI usage command", () => {
     it("shows zero usage in human-readable format when no cost data", async () => {
       const dir = await createTempDir();
       const home = path.join(dir, "home");
-      const cassMemoryDir = path.join(home, ".cass-memory");
+      const cassMemoryDir = path.join(home, ".memory-system");
 
       await mkdir(cassMemoryDir, { recursive: true });
 
       const config = {
         schema_version: 1,
         budget: {
-          dailyLimit: 0.10,
-          monthlyLimit: 2.00
+          dailyLimit: 0.50,
+          monthlyLimit: 10.00
         }
       };
       await writeFile(path.join(cassMemoryDir, "config.json"), JSON.stringify(config));
@@ -528,8 +528,8 @@ describe("E2E: CLI usage command", () => {
       const { home } = await setupTestEnvironment({
         dailyCost: 0.02,  // 20% of limit
         monthlyCost: 0.20,  // 10% of limit
-        dailyLimit: 0.10,
-        monthlyLimit: 2.00
+        dailyLimit: 0.50,
+        monthlyLimit: 10.00
       });
       const originalHome = process.env.HOME;
 
@@ -557,8 +557,8 @@ describe("E2E: CLI usage command", () => {
       const { home } = await setupTestEnvironment({
         dailyCost: 0.085,  // 85% of limit
         monthlyCost: 1.70,  // 85% of limit
-        dailyLimit: 0.10,
-        monthlyLimit: 2.00
+        dailyLimit: 0.50,
+        monthlyLimit: 10.00
       });
       const originalHome = process.env.HOME;
 
@@ -582,10 +582,10 @@ describe("E2E: CLI usage command", () => {
 
     it("shows red bar when over limit", async () => {
       const { home } = await setupTestEnvironment({
-        dailyCost: 0.15,  // 150% of limit
-        monthlyCost: 0.50,
-        dailyLimit: 0.10,
-        monthlyLimit: 2.00
+        dailyCost: 0.75,  // 150% of limit
+        monthlyCost: 2.00,
+        dailyLimit: 0.50,
+        monthlyLimit: 10.00
       });
       const originalHome = process.env.HOME;
 

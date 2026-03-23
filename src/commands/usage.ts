@@ -60,7 +60,7 @@ export async function usageCommand(options: UsageOptions = {}): Promise<void> {
     console.log(`Daily:   ${renderProgressBar(stats.today, stats.dailyLimit)}`);
     console.log(`Monthly: ${renderProgressBar(stats.month, stats.monthlyLimit)}`);
 
-    console.log(chalk.gray(`\n${formatTipPrefix()}Configure limits in ~/.cass-memory/config.json under 'budget'`));
+    console.log(chalk.gray(`\n${formatTipPrefix()}Configure limits in ~/.memory-system/config.json under 'budget'`));
   } catch (err) {
     reportError(err instanceof Error ? err : String(err), { json: options.json, command, startedAtMs });
   }

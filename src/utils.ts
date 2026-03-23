@@ -864,7 +864,7 @@ export function getErrorCategoryAction(category: ErrorCategory): string {
     case "user_input":
       return "Check the command arguments and try again";
     case "configuration":
-      return "Check your config files (~/.cass-memory/config.json or .cass/config.yaml)";
+      return "Check your config files (~/.memory-system/config.json or .cass/config.yaml)";
     case "filesystem":
       return "Check file permissions and available disk space";
     case "network":
@@ -1068,7 +1068,7 @@ export async function resolveRepoDir(): Promise<string | null> {
 }
 
 export function resolveGlobalDir(): string {
-  return expandPath("~/.cass-memory");
+  return expandPath("~/.memory-system");
 }
 
 export async function ensureGlobalStructure(
@@ -1082,7 +1082,10 @@ export async function ensureGlobalStructure(
   await ensureDir(globalDir);
 
   // Subdirectories
-  const subdirs = ["diary", "reflections", "embeddings", "cost"];
+  const subdirs = [
+    "diary", "reflections", "embeddings", "cost",
+    "session-notes", "knowledge", "digests", "notes",
+  ];
   for (const d of subdirs) {
       await ensureDir(path.join(globalDir, d));
   }
@@ -1174,7 +1177,7 @@ export async function ensureRepoStructure(cassDir: string): Promise<{
     existed.push("playbook.yaml");
   } else {
     const emptyPlaybook = `# Project-specific playbook rules
-# These are merged with your global ~/.cass-memory/playbook.yaml
+# These are merged with your global ~/.memory-system/playbook.yaml
 # Project rules take precedence over global rules
 schema_version: 2
 name: repo-playbook

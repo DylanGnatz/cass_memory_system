@@ -60,8 +60,8 @@ describe("getDefaultConfig()", () => {
 
   test("budget defaults are sensible", () => {
     const config = getDefaultConfig();
-    expect(config.budget.dailyLimit).toBe(0.10);
-    expect(config.budget.monthlyLimit).toBe(2.00);
+    expect(config.budget.dailyLimit).toBe(0.50);
+    expect(config.budget.monthlyLimit).toBe(10.00);
     expect(config.budget.warningThreshold).toBe(80);
     expect(config.budget.currency).toBe("USD");
   });
@@ -215,7 +215,7 @@ describe("loadConfig() - CLI overrides", () => {
 // loadConfig() - Global config file
 // =============================================================================
 describe("loadConfig() - Global config file", () => {
-  test("loads config from ~/.cass-memory/config.json when present", async () => {
+  test("loads config from ~/.memory-system/config.json when present", async () => {
     await withTempCassHome(async (env) => {
       // Write a global config
       await writeFile(
@@ -360,8 +360,8 @@ provider: openai
 
           // Sensitive paths should use defaults, NOT the repo values
           expect(config.cassPath).toBe("cass");
-          expect(config.playbookPath).toBe("~/.cass-memory/playbook.yaml");
-          expect(config.diaryDir).toBe("~/.cass-memory/diary");
+          expect(config.playbookPath).toBe("~/.memory-system/playbook.yaml");
+          expect(config.diaryDir).toBe("~/.memory-system/diary");
           // Sensitive user-level settings should not be overrideable by repo config
           expect(config.apiKey).toBeUndefined();
           expect(config.budget.dailyLimit).toBe(DEFAULT_CONFIG.budget.dailyLimit);
@@ -579,8 +579,8 @@ model: from-yml
 
           // Sensitive paths should use defaults
           expect(config.cassPath).toBe("cass");
-          expect(config.playbookPath).toBe("~/.cass-memory/playbook.yaml");
-          expect(config.diaryDir).toBe("~/.cass-memory/diary");
+          expect(config.playbookPath).toBe("~/.memory-system/playbook.yaml");
+          expect(config.diaryDir).toBe("~/.memory-system/diary");
           // Non-sensitive values should be applied
           expect(config.provider).toBe("openai");
         } finally {
@@ -839,7 +839,7 @@ describe("loadConfig() - Error handling", () => {
 // saveConfig() - Writing config
 // =============================================================================
 describe("saveConfig()", () => {
-  test("writes config to ~/.cass-memory/config.json", async () => {
+  test("writes config to ~/.memory-system/config.json", async () => {
     await withTempCassHome(async (env) => {
       const config = getDefaultConfig();
       config.provider = "openai";
@@ -862,14 +862,14 @@ describe("saveConfig()", () => {
       const originalHome = process.env.HOME;
       try {
         process.env.HOME = tempDir;
-        // .cass-memory directory doesn't exist yet
+        // .memory-system directory doesn't exist yet
 
         const config = getDefaultConfig();
         await saveConfig(config);
 
         const { readFile } = await import("node:fs/promises");
         const content = await readFile(
-          join(tempDir, ".cass-memory", "config.json"),
+          join(tempDir, ".memory-system", "config.json"),
           "utf-8"
         );
         const saved = JSON.parse(content);
@@ -919,8 +919,8 @@ describe("Config Defaults Snapshot", () => {
 
     // Paths
     expect(defaults.cassPath).toBe("cass");
-    expect(defaults.playbookPath).toBe("~/.cass-memory/playbook.yaml");
-    expect(defaults.diaryDir).toBe("~/.cass-memory/diary");
+    expect(defaults.playbookPath).toBe("~/.memory-system/playbook.yaml");
+    expect(defaults.diaryDir).toBe("~/.memory-system/diary");
 
     // Scoring
     expect(defaults.scoring.decayHalfLifeDays).toBe(90);
@@ -930,8 +930,8 @@ describe("Config Defaults Snapshot", () => {
     expect(defaults.scoring.maxHarmfulRatioForProven).toBe(0.1);
 
     // Budget
-    expect(defaults.budget.dailyLimit).toBe(0.10);
-    expect(defaults.budget.monthlyLimit).toBe(2.00);
+    expect(defaults.budget.dailyLimit).toBe(0.50);
+    expect(defaults.budget.monthlyLimit).toBe(10.00);
     expect(defaults.budget.warningThreshold).toBe(80);
     expect(defaults.budget.currency).toBe("USD");
 
@@ -944,7 +944,7 @@ describe("Config Defaults Snapshot", () => {
 
     // Feature flags
     expect(defaults.validationEnabled).toBe(true);
-    expect(defaults.semanticSearchEnabled).toBe(false);
+    expect(defaults.semanticSearchEnabled).toBe(true);
     expect(defaults.autoReflect).toBe(false);
     expect(defaults.crossAgent.enabled).toBe(false);
   });

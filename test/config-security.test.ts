@@ -20,7 +20,7 @@ describe("config security", () => {
     beforeAll(async () => {
         await fs.mkdir(HOME_DIR, { recursive: true });
         await fs.mkdir(REPO_DIR, { recursive: true });
-        await fs.mkdir(path.join(HOME_DIR, ".cass-memory"), { recursive: true });
+        await fs.mkdir(path.join(HOME_DIR, ".memory-system"), { recursive: true });
         
         process.env.HOME = HOME_DIR;
         process.chdir(REPO_DIR);
@@ -43,7 +43,7 @@ describe("config security", () => {
             model: "global-model"
         };
         await fs.writeFile(
-            path.join(HOME_DIR, ".cass-memory", "config.json"), 
+            path.join(HOME_DIR, ".memory-system", "config.json"), 
             JSON.stringify(globalConfig)
         );
 

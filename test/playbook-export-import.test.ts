@@ -66,9 +66,9 @@ describe("playbook export command", () => {
       const playbook = createTestPlaybook(bullets);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       const capture = captureConsole();
@@ -94,9 +94,9 @@ describe("playbook export command", () => {
       const playbook = createTestPlaybook(bullets);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       const capture = captureConsole();
@@ -125,9 +125,9 @@ describe("playbook export command", () => {
       const playbook = createTestPlaybook(bullets);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       const capture = captureConsole();
@@ -155,9 +155,9 @@ describe("playbook export command", () => {
       const playbook = createTestPlaybook(bullets);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       const capture = captureConsole();
@@ -186,9 +186,9 @@ describe("playbook export command", () => {
       const playbook = createTestPlaybook(bullets);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       const capture = captureConsole();
@@ -231,9 +231,9 @@ describe("playbook import command", () => {
       const playbook = createTestPlaybook([]);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       // Create import file
@@ -271,9 +271,9 @@ describe("playbook import command", () => {
       const playbook = createTestPlaybook([]);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       // Create JSON import file
@@ -307,9 +307,9 @@ describe("playbook import command", () => {
       ]);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       // Try to import same ID plus new one
@@ -349,9 +349,9 @@ describe("playbook import command", () => {
       ]);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       const importFile = path.join(dir, "import.yaml");
@@ -386,9 +386,9 @@ describe("playbook import command", () => {
       const playbook = createTestPlaybook([]);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       // Reset exitCode before test
@@ -415,9 +415,9 @@ describe("playbook import command", () => {
       const playbook = createTestPlaybook([]);
       await savePlaybookToPath(playbook, playbookPath);
 
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       const importFile = path.join(dir, "bad.yaml");
@@ -464,7 +464,7 @@ describe("playbook export/import roundtrip", () => {
     await withTempDir("playbook-roundtrip", async (dir) => {
       // Setup source environment
       const sourcePlaybookPath = path.join(dir, "source", "playbook.yaml");
-      await mkdir(path.join(dir, "source", ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, "source", ".memory-system"), { recursive: true });
       const sourceBullets = [
         createTestBullet({
           id: "b-roundtrip",
@@ -479,7 +479,7 @@ describe("playbook export/import roundtrip", () => {
       const sourcePlaybook = createTestPlaybook(sourceBullets);
       await savePlaybookToPath(sourcePlaybook, sourcePlaybookPath);
       const sourceConfig = createTestConfig({ playbookPath: sourcePlaybookPath });
-      await writeFile(path.join(dir, "source", ".cass-memory", "config.json"), JSON.stringify(sourceConfig, null, 2));
+      await writeFile(path.join(dir, "source", ".memory-system", "config.json"), JSON.stringify(sourceConfig, null, 2));
 
       // Export from source
       process.env.HOME = path.join(dir, "source");
@@ -493,11 +493,11 @@ describe("playbook export/import roundtrip", () => {
 
       // Setup target environment
       const targetPlaybookPath = path.join(dir, "target", "playbook.yaml");
-      await mkdir(path.join(dir, "target", ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, "target", ".memory-system"), { recursive: true });
       const targetPlaybook = createTestPlaybook([]);
       await savePlaybookToPath(targetPlaybook, targetPlaybookPath);
       const targetConfig = createTestConfig({ playbookPath: targetPlaybookPath });
-      await writeFile(path.join(dir, "target", ".cass-memory", "config.json"), JSON.stringify(targetConfig, null, 2));
+      await writeFile(path.join(dir, "target", ".memory-system", "config.json"), JSON.stringify(targetConfig, null, 2));
 
       // Write exported data to file
       const importFile = path.join(dir, "exported.json");

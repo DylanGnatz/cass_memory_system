@@ -294,7 +294,7 @@ describe("doctorCommand", () => {
         async () => {
           await withTempCassHome(async (env) => {
             await withCwd(env.home, async () => {
-              // Remove the ~/.cass-memory directory
+              // Remove the ~/.memory-system directory
               await rm(env.cassMemoryDir, { recursive: true, force: true });
 
               process.exitCode = 0;
@@ -718,40 +718,6 @@ describe("doctorCommand", () => {
               expect(repoCheck).toBeDefined();
               expect(repoCheck.status).toBe("pass");
               expect(repoCheck.message).toContain("Complete");
-            });
-          });
-        }
-      );
-    });
-  });
-
-  describe("trauma system checks", () => {
-    test("reports trauma database loaded", async () => {
-      await withEnvAsync(
-        { ANTHROPIC_API_KEY: undefined, OPENAI_API_KEY: undefined, GOOGLE_GENERATIVE_AI_API_KEY: undefined },
-        async () => {
-          await withTempCassHome(async (env) => {
-            await withCwd(env.home, async () => {
-              await writeFile(
-                env.configPath,
-                JSON.stringify({ cassPath: "cass" }, null, 2)
-              );
-              await writeFile(env.playbookPath, createValidPlaybookYaml());
-
-              process.exitCode = 0;
-              const { output } = await captureConsoleLog(() => doctorCommand({ json: true }));
-
-              const envelope = JSON.parse(output);
-              expect(envelope.success).toBe(true);
-              const payload = envelope.data;
-
-              // Should have a trauma system check
-              const traumaCheck = payload.checks.find(
-                (c: any) => c.category === "Trauma System" && c.item === "Database"
-              );
-              expect(traumaCheck).toBeDefined();
-              // Either pass (loaded) or warn (failed to load) are valid outcomes
-              expect(["pass", "warn"]).toContain(traumaCheck.status);
             });
           });
         }
