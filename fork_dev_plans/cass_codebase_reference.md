@@ -2,7 +2,7 @@
 
 Living document of everything we know about the codebase. **Read this before modifying any file.** Update when you discover new facts.
 
-Last updated: 2026-03-23 (post-Phase 1)
+Last updated: 2026-03-24 (post-Phase 4)
 
 ---
 
@@ -18,7 +18,7 @@ Last updated: 2026-03-23 (post-Phase 1)
 - **Line 982:** `handleCliError()` — error handling dispatcher (JSON vs human)
 - **Line 1059:** Main entry point — handles `--info`/`--examples` flags, creates program, parses async
 
-### Commands (25 active — 24 from Phase 1 + `snapshot` in Phase 2)
+### Commands (26 active — 24 from Phase 1 + `snapshot` in Phase 2 + `topic` in Phase 4)
 All follow the pattern:
 ```typescript
 program.command("<name>")
@@ -47,7 +47,7 @@ program.command("<name>")
 - **PlaybookDeltaSchema (~line 159):** Discriminated union — Add, Helpful, Harmful, Replace, Deprecate, Merge
 - **DiaryEntrySchema (~line 266):** id, sessionPath, timestamp, agent, workspace, status, accomplishments[], decisions[], challenges[], keyLearnings[], tags[], searchAnchors[]
 - **PlaybookSchema (~line 222):** schema_version, name, description, metadata, deprecatedPatterns[], bullets[]
-- **ContextResultSchema:** task, relevantBullets, antiPatterns, historySnippets, deprecatedWarnings, formattedPrompt
+- **ContextResultSchema:** task, relevantBullets, antiPatterns, searchResults (renamed from historySnippets in Phase 4, now KnowledgeSearchHit[]), deprecatedWarnings, formattedPrompt. Phase 4 optional fields: topicExcerpts, recentSessions, relatedTopics, suggestedDeepDives, lastReflectionRun
 - **ValidationResultSchema:** delta, valid, verdict (ACCEPT/REJECT/REFINE/ACCEPT_WITH_CAUTION), confidence, evidence[]
 
 ### ConfigSchema (lines 364–429)
@@ -75,7 +75,15 @@ Key defaults (post-Phase 1):
 - **`DigestUpdateDeltaSchema`** — type "digest_update", date, content, sessions_covered
 - **`TopicSuggestionDeltaSchema`** — type "topic_suggestion", slug, name, description, suggested_from_session
 - **`KnowledgeDeltaSchema`** — discriminated union of the above 3 delta types
-- **`ProcessingStateSchema`** — sessions (record of per-session state), lastReflectionRun, lastIndexUpdate
+- **`ProcessingStateSchema`** — sessions (record of per-session state), lastReflectionRun, lastIndexUpdate, lastPeriodicJobRun (Phase 4)
+
+### Phase 4 Types
+- **`KnowledgeSearchHitSchema`** — type (knowledge|session_note|digest|transcript|playbook), id, snippet, score, title?. Replaces CassSearchHit in ContextResult.
+- **`TopicExcerptSchema`** — topic, slug, sections[{title, preview}]
+- **`RecentSessionSchema`** — id, date, abstract, note_text
+- **`RelatedTopicSchema`** — slug, name, description, similarity
+- **`ReviewQueueItemSchema`** — Discriminated union on `type`: cold_start_suggestion, bloated_page, stale_topic
+- **`ReviewQueueSchema`** — { schema_version: z.literal(1), items: ReviewQueueItem[] }
 
 ### Delta Type Design
 Two discriminated unions on `type` field:
@@ -282,7 +290,7 @@ types, playbook, tracking, cass, diary, reflect, validate, llm (type), curate, u
 10. Processed log + auto-outcome recording
 
 ### Only One Consumer
-`src/commands/reflect.ts` is the only file that imports from orchestrator.ts.
+`src/commands/reflect.ts` imports from orchestrator.ts and periodic-job.ts (Phase 4). `src/periodic-job.ts` also imports from orchestrator.ts.
 
 ---
 
@@ -304,7 +312,7 @@ types, playbook, tracking, cass, diary, reflect, validate, llm (type), curate, u
 | `src/cass.ts` | 1175 | External binary interface (DO NOT TOUCH) |
 | `src/onboard-state.ts` | ~240 | Onboarding state (kept — commands/onboard.ts depends on it) |
 
-## Modules to Modify in Future Phases
+## Modules Modified in Phases 3-4
 
 | File | Phase | Key Changes |
 |------|-------|-------------|
@@ -312,11 +320,25 @@ types, playbook, tracking, cass, diary, reflect, validate, llm (type), curate, u
 | `src/validate.ts` | 3 | Three-source evidence model |
 | `src/curate.ts` | 3 | New KnowledgeDelta type handlers |
 | `src/diary.ts` | 3 | Generate from session notes instead of raw transcripts |
-| `src/orchestrator.ts` | 3 | New pipeline steps for knowledge pages |
+| `src/orchestrator.ts` | 3+4 | New pipeline steps for knowledge pages. Phase 4: extended re-indexing (session notes + digests + lastIndexUpdate) |
 | `src/outcome.ts` | 3 | Knowledge page section tracking |
 | `src/tracking.ts` | 3 | New event types |
-| `src/commands/serve.ts` | 4 | New MCP tools for knowledge queries. Phase 2: added `cm_snapshot` tool |
-| `src/commands/context.ts` | 4 | FTS + semantic ranking, topic/knowledge queries |
+| `src/commands/serve.ts` | 2+4 | Phase 2: `cm_snapshot` tool. Phase 4: `cm_detail` (path-safe file reading, section extraction), `cm_search` (FTS + playbook search, scope filtering), `memory_search` deprecated alias, 5 new MCP resources (cm://topics, cm://knowledge/{topic}, cm://digest/{date}, cm://today, cm://status). Updated cm_context/cm_feedback descriptions. |
+| `src/commands/context.ts` | 4 | Replaced cass binary with SQLite FTS + semantic ranking. Added topic excerpts, related topics, unprocessed sessions, deep dives, lastReflectionRun. Renamed historySnippets → searchResults. |
+| `src/commands/reflect.ts` | 4 | Added `--full` flag → invokes `runPeriodicJob()` instead of `orchestrateReflection()` |
+| `src/commands/mcp-stdio.ts` | 4 | Wired `maybeRunPeriodicJobBackground()` at server start |
+
+---
+
+## Global Claude Code Configuration (outside repo)
+
+| File | Purpose |
+|------|---------|
+| `~/.claude/.mcp.json` | Registers `cass-memory` MCP server globally (stdio transport via `scripts/mcp-stdio.sh`) |
+| `~/.claude/CLAUDE.md` | Global instructions — MANDATORY `cm_snapshot` instruction for all sessions |
+| `~/.claude/commands/snapshot.md` | `/snapshot` slash command — manual trigger for session note capture |
+
+These files live outside the repo but are critical to the capture pipeline. The MCP server and CLAUDE.md instruction ensure session notes are captured in every Claude Code session, regardless of which project is active.
 
 ---
 
@@ -329,11 +351,16 @@ types, playbook, tracking, cass, diary, reflect, validate, llm (type), curate, u
 ## Dependency Graph
 
 ### Key Import Chains
-- **orchestrator.ts** → types, playbook, tracking, cass, diary, reflect, validate, llm, curate, utils, lock, outcome (12 modules)
-- **curate.ts** → semantic, scoring, types, utils
-- **validate.ts** → semantic, cass, types
+- **orchestrator.ts** → types, playbook, tracking, cass, diary, reflect, validate, llm, curate, utils, lock, outcome, session-notes, knowledge-page, search (15 modules post-Phase 3)
+- **periodic-job.ts** → types, utils, session-notes, orchestrator, review-queue, knowledge-page, cost (Phase 4)
+- **commands/serve.ts** → context, mark, outcome, config, playbook, diary, cass, utils, scoring, types, search, knowledge-page, session-notes, fs, path (Phase 4 additions)
+- **commands/context.ts** → config, playbook, utils, types, search, knowledge-page, session-notes, semantic (Phase 4 additions)
+- **commands/reflect.ts** → config, orchestrator, periodic-job, cost, utils, output, progress, types (Phase 4: added periodic-job)
+- **curate.ts** → semantic, scoring, types, utils, knowledge-page
+- **validate.ts** → semantic, cass, types, search, utils
 - **reflect.ts** → llm, types, utils
-- **llm.ts** → cost (checkBudget, recordCost)
+- **llm.ts** → cost (checkBudget, recordCost), types (Zod schemas)
+- **knowledge-page.ts** → types, utils, lock, semantic, review-queue (Phase 4: added semantic, review-queue)
 - **config.ts** → types, utils
 - **Everything** → utils, types
 
@@ -350,4 +377,144 @@ All internal imports use `.js` extension (ESM): `import { foo } from "./bar.js"`
 - **Helpers:** `test/helpers/` — `temp.ts` (isolated HOME environments), `factories.ts` (test data builders), `e2e-logger.ts`, `git.ts`
 - **Fixtures:** `test/fixtures/`
 - **Naming:** `.e2e.test.ts` (spawn CLI), `.integration.test.ts` (multi-module), `.test.ts` (unit)
-- **Baseline:** 2355 pass, 46 fail (all in serve-stats.test.ts — pre-existing), 3 skip
+- **Baseline:** 2461 pass, 46 fail (all in serve-stats/serve-command.test.ts — pre-existing), 3 skip (post-Phase 4)
+- **Phase 3 test files:** `test/phase3-reflect.test.ts` (10), `test/phase3-validate.test.ts` (14), `test/knowledge-page.test.ts` (17)
+- **Phase 4 test files:** `test/phase4-context.test.ts` (15), `test/phase4-search.test.ts` (29), `test/phase4-topics.test.ts` (12), `test/phase4-periodic-job.test.ts` (7)
+
+---
+
+## knowledge-page.ts — Knowledge Page I/O (NEW, Phase 3)
+
+### Structure
+- **parseKnowledgePage():** Parses markdown with YAML frontmatter + HTML comment metadata per section. 3-line lookahead for `<!-- id: ... -->` comments after `## Heading`.
+- **serializeKnowledgePage():** Roundtrip-safe serialization back to markdown.
+- **loadKnowledgePage() / writeKnowledgePage():** File I/O with `withLock()` + `atomicWrite()`.
+- **appendSectionToPage():** Appends a section to an existing page or creates a new one. Deduplicates by source session ID.
+- **loadTopics() / saveTopics() / addTopicSuggestion():** CRUD for `topics.json`.
+- **appendToDigest():** Appends to daily digest files in `~/.memory-system/digests/`.
+
+### Metadata Comment Format
+```
+<!-- id: sec-xyz | confidence: verified | source: session-id | added: 2026-03-23 | related_bullets: b-123 -->
+```
+Parser handles: blank lines between heading and comment (3-line lookahead), missing metadata (defaults to `id: ""`, `confidence: "uncertain"`), multiple `related_bullets` (comma-separated).
+
+### Phase 4 Additions
+- **addTopic(slug, name, description, source, config):** Writes to topics.json via withLock + atomicWrite. Returns `{added: true}` or `{added: false, reason}` (doesn't throw for duplicates).
+- **removeTopic(slug, config, {force?}):** Only removes system topics unless `force: true`. Returns `{removed: true}` or `{removed: false, reason}`.
+- **listTopicsWithMetadata(config):** Joins topics.json with knowledge page frontmatter. Returns sectionCount, wordCount, lastUpdated per topic.
+- **coldStartTopic(slug, description, config):** Embeds description via semantic.ts, searches existing knowledge pages + session notes by cosine similarity (threshold 0.3), writes top-10 matches to review queue.
+
+---
+
+## review-queue.ts — Review Queue I/O (NEW, Phase 4)
+
+- **loadReviewQueue(config) / saveReviewQueue(queue, config):** File I/O with `withLock()` + `atomicWrite()`. Stored at `~/.memory-system/review-queue.json`.
+- **appendReviewItems(items, config):** Deduplicates by composite key `(type, target_topic, source)` via `compositeKey()` helper. Returns `{added: N}`.
+- **dismissReviewItem(id, config) / approveReviewItem(id, config):** Status updates (`pending` → `dismissed`/`approved`).
+- **flagContent(targetPath, config, {section?, reason?, topic?}):** Creates `user_flag` review queue item with dedup. (Phase 5 pre-work)
+- **ReviewQueueItemSchema:** Discriminated union on `type`: `cold_start_suggestion`, `bloated_page`, `stale_topic`, `user_flag` (Phase 5). Each has `id`, `status`, `created`, `target_topic` + type-specific `data`/`source`.
+
+---
+
+## periodic-job.ts — Periodic Job System (NEW, Phase 4)
+
+### Lock System
+- **tryAcquirePeriodicJobLock(config):** Writes `{pid, startedAt}` to `~/.memory-system/.periodic-job.lock` using `wx` flag (atomic create-or-fail). Returns `{acquired: true}` or `{acquired: false, reason}`. Detects stale locks >15 minutes old.
+- **releasePeriodicJobLock(config):** Unlinks lock file.
+
+### Timer
+- **shouldRunPeriodicJob(config):** Compares `lastPeriodicJobRun` in state.json vs `config.periodicJobIntervalHours` (default 24h).
+
+### Full Pipeline
+- **runPeriodicJob(config, {dryRun?, verbose?}):** Lock → budget check → processAllTranscripts → orchestrateReflection → cleanup (flag bloated pages >5000 words, stale system topics >30 days with 0 sections → review queue) → update lastPeriodicJobRun → release lock (in finally).
+- **maybeRunPeriodicJobBackground(config):** Fire-and-forget Promise, called once at MCP server start. Checks if overdue, runs in background. Errors logged, never crashes server.
+
+### Imports
+- orchestrator.ts (orchestrateReflection), session-notes.ts (processAllTranscripts, loadProcessingState, saveProcessingState), knowledge-page.ts (listTopicsWithMetadata, loadTopics), review-queue.ts (appendReviewItems), cost.ts (checkBudget)
+
+---
+
+## commands/topic.ts — Topic CLI (NEW, Phase 4)
+
+- **topicCommand(subcommand, args, opts):** Handles `cm topic add|list|remove`.
+- `add`: Creates topic via addTopic(), runs coldStartTopic() if description provided, outputs suggestions.
+- `list`: Shows topics with metadata (section count, word count, last updated).
+- `remove`: Removes topic. Force required for user-created topics.
+- Imports `loadConfig` from `config.ts` (NOT utils.ts — common gotcha).
+
+---
+
+## user-notes.ts — User Note CRUD (NEW, Phase 5 pre-work)
+
+- **createUserNote(title, body, config, {topics?}):** Generates `note-{timestamp36}-{random6}` ID, writes to `~/.memory-system/notes/{id}.md` with YAML frontmatter + body via withLock + atomicWrite.
+- **loadUserNote(id, config):** Returns `{ frontmatter: UserNote, body, raw }` or null.
+- **saveUserNote(id, frontmatter, body, config):** Full overwrite with locking.
+- **deleteUserNote(id, config):** fs.unlink, returns boolean.
+- **listUserNotes(config):** Reads all .md from notes dir, parses frontmatter only, sorts by created desc.
+- **parseUserNote(raw) / serializeUserNote(fm, body):** YAML frontmatter parse/serialize following session-notes.ts patterns.
+
+---
+
+## starred.ts — Starred Items Index (NEW, Phase 5 pre-work)
+
+- Uses separate `~/.memory-system/starred.json` (NOT frontmatter) to avoid triggering `user_edited` semantics.
+- **StarredItemSchema:** `{ path, section?, starred_at }` with Zod validation.
+- **starItem(path, config, {section?}):** Dedup by composite `path::section` key, withLock + atomicWrite.
+- **unstarItem(path, config, {section?}):** Removes by composite key.
+- **isStarred(path, config, {section?}):** Boolean check.
+- **loadStarred(config):** Returns all starred items.
+
+---
+
+## Electron App (NEW, Phase 5)
+
+### Directory: `electron/`
+Separate package with its own `package.json` (Node.js, not Bun). Built with electron-vite.
+
+### Main Process (`electron/src/main/`)
+| File | Purpose |
+|------|---------|
+| `index.ts` | App lifecycle, BrowserWindow (contextIsolation: true, nodeIntegration: false) |
+| `ipc-handlers.ts` | 20 IPC handlers routing to file-reader, search, cli-bridge, file-ops |
+| `file-reader.ts` | 12 reader functions + ported frontmatter/knowledge page parsers. Cross-platform via os.homedir(). Path traversal security on saveFile(). |
+| `search.ts` | better-sqlite3 readonly FTS5 search across fts_knowledge, fts_sessions, fts_digests, fts_notes, fts_transcripts. Transcripts scored 0.5x. reopenSearchDb() for watcher. |
+| `cli-bridge.ts` | `spawn('bun', ['run', CM_PATH, ...args, '--json'])` for topic add/remove and reflection |
+| `file-ops.ts` | Direct mutations: review queue (approve/dismiss/flag), starred (star/unstar), user notes (create/save/delete) |
+| `watcher.ts` | chokidar on ~/.memory-system/, 500ms awaitWriteFinish, 300ms debounce, ignores lock/cache/tmp |
+| `types.ts` | Display-oriented TypeScript interfaces for IPC layer (no Zod) |
+| `claude.ts` | Anthropic API: conversation state, 2 locally-fulfilled tools (search_knowledge_base, read_document), agentic loop (max 5 iterations). Requires ANTHROPIC_API_KEY env var. (Phase 5c) |
+
+### Preload (`electron/src/preload/`)
+- `index.ts` — contextBridge exposing ~28 typed IPC methods (25 from 5a/5b + 3 Claude from 5c). Exports `ElectronAPI` type.
+
+### Renderer (`electron/src/renderer/`)
+| File | Purpose |
+|------|---------|
+| `App.tsx` | Root layout: search bar, sidebar, content router (7 view types), Claude dialog, status bar, dialog modals |
+| `stores/ui-store.ts` | Zustand: 5 sidebar tabs, 7 content view types, search/edit/reflection/dialog state |
+| `hooks/*.ts` | 10 TanStack Query hooks (topics, knowledge-page, session-notes, digests, search, status, review-queue, starred, user-notes, file-watcher) |
+| `components/layout/SearchBar.tsx` | Cmd+K, debounced FTS, keyboard nav, type-badged results dropdown |
+| `components/layout/Sidebar.tsx` | 5 tabs (Topics, Recent, Starred, Notes, Review) with review badge count |
+| `components/layout/StatusBar.tsx` | Last reflection time, topic count, unprocessed count, Run Reflection button, animated progress bar during reflection |
+| `components/sidebar/*.tsx` | EncyclopediaTab (filterable), RecentTab (grouped by date), StarredTab, MyNotesTab, ReviewQueueTab |
+| `components/content/KnowledgePage.tsx` | Confidence stripes + badges, section metadata, ActionToolbar on hover |
+| `components/content/SessionNote.tsx` | Header card with topic tags + status badges |
+| `components/content/DigestView.tsx` | Date header + markdown |
+| `components/content/UserNote.tsx` | Inline title editing, delete confirmation |
+| `components/content/ReviewQueue.tsx` | Grouped by type, approve/dismiss actions |
+| `components/content/Editor.tsx` | Textarea with save/cancel, query invalidation |
+| `components/content/MarkdownRenderer.tsx` | react-markdown + remark-gfm + rehype-highlight |
+| `components/actions/ActionToolbar.tsx` | Verify, invalidate, flag, star on knowledge sections |
+| `components/actions/InvalidateDialog.tsx` | Modal: reason → wraps in [INVALIDATED] annotation |
+| `components/actions/FlagDialog.tsx` | Modal: reason → creates user_flag in review queue |
+| `components/claude/ClaudeDialog.tsx` | Collapsible panel (Cmd+J), chat with Claude, markdown responses, tool usage badges, thinking animation. Requires ANTHROPIC_API_KEY. (Phase 5c) |
+| `styles/global.css` | "Archival Precision" theme: warm dark tones, JetBrains Mono metadata, DM Sans body, amber accent, confidence tier stripes. ~1200 lines covering all components. |
+
+### Build
+- `electron-vite build` from `electron/` directory
+- Outputs: `out/main/` (31KB), `out/preload/` (2.8KB), `out/renderer/` (1.4MB JS + 37KB CSS)
+- **Gotcha:** better-sqlite3 on macOS needs `SDKROOT=$(xcrun --show-sdk-path) LDFLAGS="-L$(xcrun --show-sdk-path)/usr/lib" npm install`
+
+### Dependencies
+electron, electron-vite, better-sqlite3, chokidar, @tanstack/react-query, zustand, react 19, react-dom, react-markdown, remark-gfm, rehype-highlight, @anthropic-ai/sdk

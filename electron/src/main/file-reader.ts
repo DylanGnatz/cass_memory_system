@@ -1,0 +1,422 @@
+// Main process file reader — direct reads from ~/.memory-system/
+// Fast, no CLI subprocess overhead. Used for all read operations.
+
+import fs from 'node:fs'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+import os from 'node:os'
+import type {
+  TopicSummary,
+  KnowledgePageData,
+  KnowledgeSectionData,
+  SessionNoteSummary,
+  SessionNoteData,
+  DigestSummary,
+  SystemStatus,
+  ReviewQueueItemData,
+  StarredItemData,
+  UserNoteData,
+  UserNoteFullData
+} from './types'
+
+// ============================================================================
+// PATHS
+// ============================================================================
+
+function memoryDir(): string {
+  return path.join(os.homedir(), '.memory-system')
+}
+
+function knowledgeDir(): string {
+  return path.join(memoryDir(), 'knowledge')
+}
+
+function sessionNotesDir(): string {
+  return path.join(memoryDir(), 'session-notes')
+}
+
+function digestsDir(): string {
+  return path.join(memoryDir(), 'digests')
+}
+
+function notesDir(): string {
+  return path.join(memoryDir(), 'notes')
+}
+
+// ============================================================================
+// PARSERS (ported from src/knowledge-page.ts and src/session-notes.ts)
+// ============================================================================
+
+/** Parse YAML frontmatter from a markdown file. Returns { frontmatter, body }. */
+function parseFrontmatter(raw: string): { fm: Record<string, any>; body: string } {
+  const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/)
+  if (!match) return { fm: {}, body: raw }
+
+  const fm: Record<string, any> = {}
+  for (const line of match[1].split('\n')) {
+    const colonIdx = line.indexOf(':')
+    if (colonIdx === -1) continue
+    const key = line.slice(0, colonIdx).trim()
+    let value: any = line.slice(colonIdx + 1).trim()
+
+    if (value === 'true') value = true
+    else if (value === 'false') value = false
+    else if (/^\d+$/.test(value)) value = parseInt(value, 10)
+    else if ((value.startsWith('"') && value.endsWith('"')) ||
+             (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    } else if (value.startsWith('[')) {
+      try { value = JSON.parse(value) } catch { value = [] }
+    }
+    fm[key] = value
+  }
+
+  return { fm, body: match[2] }
+}
+
+/** Parse HTML comment metadata from knowledge page sections. */
+function parseMetaComment(line: string): Record<string, string> | null {
+  const match = line.match(/^<!--\s*(.+?)\s*-->$/)
+  if (!match) return null
+
+  const pairs: Record<string, string> = {}
+  for (const segment of match[1].split(' | ')) {
+    const colonIdx = segment.indexOf(':')
+    if (colonIdx === -1) continue
+    const key = segment.slice(0, colonIdx).trim()
+    const value = segment.slice(colonIdx + 1).trim()
+    if (key && value) pairs[key] = value
+  }
+  return pairs
+}
+
+/** Parse a knowledge page into structured data with section metadata. */
+function parseKnowledgePage(raw: string): KnowledgePageData {
+  const { fm, body } = parseFrontmatter(raw)
+
+  const sections: KnowledgeSectionData[] = []
+  const lines = body.split('\n')
+  const HEADING_RE = /^#{2}\s+(.+)$/
+  let i = 0
+
+  while (i < lines.length) {
+    const headingMatch = lines[i].match(HEADING_RE)
+    if (!headingMatch) { i++; continue }
+
+    const title = headingMatch[1].trim()
+    i++
+
+    // 3-line lookahead for metadata comment
+    let meta: Record<string, string> | null = null
+    let metaLineIdx = -1
+    for (let lookahead = 0; lookahead < 3 && i + lookahead < lines.length; lookahead++) {
+      const candidate = lines[i + lookahead].trim()
+      if (candidate === '') continue
+      meta = parseMetaComment(candidate)
+      if (meta) { metaLineIdx = i + lookahead; break }
+      break
+    }
+    if (metaLineIdx >= 0) i = metaLineIdx + 1
+
+    // Collect content until next heading or EOF
+    const contentLines: string[] = []
+    while (i < lines.length && !HEADING_RE.test(lines[i])) {
+      contentLines.push(lines[i])
+      i++
+    }
+
+    sections.push({
+      id: meta?.id || '',
+      title,
+      content: contentLines.join('\n').trim(),
+      confidence: meta?.confidence || 'uncertain',
+      source: meta?.source || '',
+      added: meta?.added || '',
+      related_bullets: meta?.related_bullets
+        ? meta.related_bullets.split(',').map(s => s.trim()).filter(Boolean)
+        : []
+    })
+  }
+
+  return {
+    frontmatter: {
+      topic: fm.topic || '',
+      description: fm.description || '',
+      source: fm.source || 'system',
+      created: fm.created || '',
+      last_updated: fm.last_updated || ''
+    },
+    sections,
+    raw
+  }
+}
+
+// ============================================================================
+// READERS
+// ============================================================================
+
+export async function readTopics(): Promise<TopicSummary[]> {
+  const topicsPath = path.join(memoryDir(), 'topics.json')
+  try {
+    const raw = await fsp.readFile(topicsPath, 'utf-8')
+    const data = JSON.parse(raw)
+    const topics = data.topics || []
+
+    // Enrich with knowledge page metadata
+    const result: TopicSummary[] = []
+    for (const t of topics) {
+      let sectionCount = 0
+      let wordCount = 0
+      let lastUpdated: string | null = null
+
+      const pagePath = path.join(knowledgeDir(), `${t.slug}.md`)
+      try {
+        const pageRaw = await fsp.readFile(pagePath, 'utf-8')
+        const page = parseKnowledgePage(pageRaw)
+        sectionCount = page.sections.length
+        wordCount = page.sections.reduce((sum, s) => sum + s.content.split(/\s+/).length, 0)
+        lastUpdated = page.frontmatter.last_updated || null
+      } catch { /* no knowledge page yet */ }
+
+      result.push({
+        slug: t.slug,
+        name: t.name,
+        description: t.description || '',
+        source: t.source || 'user',
+        created: t.created || '',
+        sectionCount,
+        wordCount,
+        lastUpdated
+      })
+    }
+
+    return result
+  } catch {
+    return []
+  }
+}
+
+export async function readKnowledgePage(slug: string): Promise<KnowledgePageData | null> {
+  const pagePath = path.join(knowledgeDir(), `${slug}.md`)
+  try {
+    const raw = await fsp.readFile(pagePath, 'utf-8')
+    return parseKnowledgePage(raw)
+  } catch {
+    return null
+  }
+}
+
+export async function readSessionNotes(limit = 50): Promise<SessionNoteSummary[]> {
+  try {
+    const files = await fsp.readdir(sessionNotesDir())
+    const notes: SessionNoteSummary[] = []
+
+    for (const file of files) {
+      if (!file.endsWith('.md')) continue
+      try {
+        const raw = await fsp.readFile(path.join(sessionNotesDir(), file), 'utf-8')
+        const { fm } = parseFrontmatter(raw)
+        notes.push({
+          id: fm.id || file.replace('.md', ''),
+          created: fm.created || '',
+          last_updated: fm.last_updated || '',
+          abstract: fm.abstract || '',
+          topics_touched: Array.isArray(fm.topics_touched) ? fm.topics_touched : [],
+          processed: fm.processed === true,
+          user_edited: fm.user_edited === true
+        })
+      } catch { /* skip unparseable */ }
+    }
+
+    notes.sort((a, b) => (b.last_updated > a.last_updated ? 1 : b.last_updated < a.last_updated ? -1 : 0))
+    return notes.slice(0, limit)
+  } catch {
+    return []
+  }
+}
+
+export async function readSessionNote(id: string): Promise<SessionNoteData | null> {
+  const notePath = path.join(sessionNotesDir(), `${id}.md`)
+  try {
+    const raw = await fsp.readFile(notePath, 'utf-8')
+    const { fm, body } = parseFrontmatter(raw)
+    return {
+      frontmatter: {
+        id: fm.id || id,
+        created: fm.created || '',
+        last_updated: fm.last_updated || '',
+        abstract: fm.abstract || '',
+        topics_touched: Array.isArray(fm.topics_touched) ? fm.topics_touched : [],
+        processed: fm.processed === true,
+        user_edited: fm.user_edited === true
+      },
+      body
+    }
+  } catch {
+    return null
+  }
+}
+
+export async function readDigests(limit = 30): Promise<DigestSummary[]> {
+  try {
+    const files = await fsp.readdir(digestsDir())
+    const digests: DigestSummary[] = files
+      .filter(f => f.endsWith('.md'))
+      .map(f => ({ date: f.replace('.md', ''), filename: f }))
+      .sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : 0))
+
+    return digests.slice(0, limit)
+  } catch {
+    return []
+  }
+}
+
+export async function readDigest(date: string): Promise<string | null> {
+  const digestPath = path.join(digestsDir(), `${date}.md`)
+  try {
+    return await fsp.readFile(digestPath, 'utf-8')
+  } catch {
+    return null
+  }
+}
+
+export async function readStatus(): Promise<SystemStatus> {
+  const statePath = path.join(memoryDir(), 'state.json')
+  const topicsPath = path.join(memoryDir(), 'topics.json')
+
+  let state: Record<string, any> = {}
+  try {
+    state = JSON.parse(await fsp.readFile(statePath, 'utf-8'))
+  } catch { /* no state yet */ }
+
+  let topicCount = 0
+  try {
+    const topics = JSON.parse(await fsp.readFile(topicsPath, 'utf-8'))
+    topicCount = topics.topics?.length || 0
+  } catch { /* no topics yet */ }
+
+  // Count unprocessed session notes
+  let unprocessedCount = 0
+  try {
+    const files = await fsp.readdir(sessionNotesDir())
+    for (const file of files) {
+      if (!file.endsWith('.md')) continue
+      try {
+        const raw = await fsp.readFile(path.join(sessionNotesDir(), file), 'utf-8')
+        const { fm } = parseFrontmatter(raw)
+        if (fm.processed !== true) unprocessedCount++
+      } catch { /* skip */ }
+    }
+  } catch { /* dir doesn't exist */ }
+
+  return {
+    lastReflectionRun: state.lastReflectionRun || null,
+    lastPeriodicJobRun: state.lastPeriodicJobRun || null,
+    lastIndexUpdate: state.lastIndexUpdate || null,
+    topicCount,
+    unprocessedSessionNotes: unprocessedCount
+  }
+}
+
+export async function readReviewQueue(): Promise<ReviewQueueItemData[]> {
+  const queuePath = path.join(memoryDir(), 'review-queue.json')
+  try {
+    const raw = await fsp.readFile(queuePath, 'utf-8')
+    const data = JSON.parse(raw)
+    return (data.items || []).map((item: any) => ({
+      id: item.id,
+      type: item.type,
+      status: item.status,
+      created: item.created,
+      target_topic: item.target_topic || '',
+      target_path: item.target_path,
+      target_section: item.target_section,
+      reason: item.reason,
+      data: item.data,
+      source: item.source
+    }))
+  } catch {
+    return []
+  }
+}
+
+export async function readStarred(): Promise<StarredItemData[]> {
+  const starredPath = path.join(memoryDir(), 'starred.json')
+  try {
+    const raw = await fsp.readFile(starredPath, 'utf-8')
+    const data = JSON.parse(raw)
+    return data.items || []
+  } catch {
+    return []
+  }
+}
+
+export async function readUserNotes(): Promise<UserNoteData[]> {
+  try {
+    const files = await fsp.readdir(notesDir())
+    const notes: UserNoteData[] = []
+
+    for (const file of files) {
+      if (!file.endsWith('.md')) continue
+      try {
+        const raw = await fsp.readFile(path.join(notesDir(), file), 'utf-8')
+        const { fm } = parseFrontmatter(raw)
+        notes.push({
+          id: fm.id || file.replace('.md', ''),
+          title: fm.title || 'Untitled',
+          created: fm.created || '',
+          topics: Array.isArray(fm.topics) ? fm.topics : [],
+          starred: fm.starred === true
+        })
+      } catch { /* skip */ }
+    }
+
+    notes.sort((a, b) => (b.created > a.created ? 1 : b.created < a.created ? -1 : 0))
+    return notes
+  } catch {
+    return []
+  }
+}
+
+export async function readUserNote(id: string): Promise<UserNoteFullData | null> {
+  const notePath = path.join(notesDir(), `${id}.md`)
+  try {
+    const raw = await fsp.readFile(notePath, 'utf-8')
+    const { fm, body } = parseFrontmatter(raw)
+    return {
+      frontmatter: {
+        id: fm.id || id,
+        title: fm.title || 'Untitled',
+        created: fm.created || '',
+        topics: Array.isArray(fm.topics) ? fm.topics : [],
+        starred: fm.starred === true
+      },
+      body
+    }
+  } catch {
+    return null
+  }
+}
+
+// ============================================================================
+// FILE WRITER (for editor save)
+// ============================================================================
+
+/** Atomic write: write to temp file then rename. */
+export async function saveFile(relativePath: string, content: string): Promise<void> {
+  const fullPath = path.join(memoryDir(), relativePath)
+
+  // Security: ensure path stays under ~/.memory-system/
+  const resolved = path.resolve(fullPath)
+  const base = memoryDir()
+  if (!resolved.startsWith(base + path.sep) && resolved !== base) {
+    throw new Error('Path traversal detected: path must be under ~/.memory-system/')
+  }
+
+  await fsp.mkdir(path.dirname(fullPath), { recursive: true })
+  const tmpPath = fullPath + '.tmp'
+  await fsp.writeFile(tmpPath, content, 'utf-8')
+  await fsp.rename(tmpPath, fullPath)
+}
+
+export { memoryDir }

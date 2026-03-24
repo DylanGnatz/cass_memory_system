@@ -8,8 +8,35 @@ Architecture plan: [v1_prototype_architecture.md](v1_prototype_architecture.md)
 
 ## Current Status
 
-**Phase:** 2 — Session Note Generation (complete, pending LLM path validation with real API key)
-**Last updated:** 2026-03-23
+**Phase:** 5 — Electron App (5a/5b/5c complete, C2+C4 deferred)
+**Last updated:** 2026-03-24
+
+---
+
+## Deferred: LLM Prompt Tuning (Post-Build)
+
+All build phases use mock LLM responses in tests. The prompts are structurally complete and follow the architecture spec, but have **not been tested against a real LLM with real data**. Prompt tuning will happen as a single pass after all build phases are complete, on a machine with an API key.
+
+**What needs tuning (by phase):**
+
+| Phase | Prompts | File | Lines |
+|-------|---------|------|-------|
+| Phase 2 | `sessionNoteCreate`, `sessionNoteAppend` | `src/llm.ts` | PROMPTS object |
+| Phase 3 | `diaryFromNote`, `reflectorCall1`, `reflectorCall2` | `src/llm.ts` | PROMPTS object |
+| Phase 4+ | (TBD — add here as phases are built) | | |
+
+**How to validate:**
+1. Clone repo on work machine with API key set (`ANTHROPIC_API_KEY`)
+2. Create a few session notes from real transcripts: `bun run src/cm.ts snapshot`
+3. Run reflection: `bun run src/cm.ts reflect`
+4. Inspect outputs: `~/.memory-system/knowledge/*.md`, `~/.memory-system/digests/*.md`, playbook bullets
+5. Iterate on prompts in `src/llm.ts` PROMPTS object until output quality is acceptable
+6. Key things to watch for: knowledge sections that parrot existing pages (guardrail failure), empty/generic bullets, topic misrouting, overly verbose digests
+
+**This is safe to defer** because:
+- Agent-provided path (`cm_snapshot` via MCP) doesn't use LLM — works today
+- All pipeline logic (parsing, dedup, validation, curation) is tested against mock data
+- Prompt tuning is isolated to the PROMPTS object in `src/llm.ts` — no structural changes needed
 
 ---
 
@@ -169,3 +196,262 @@ Architecture plan: [v1_prototype_architecture.md](v1_prototype_architecture.md)
 **No regressions introduced.**
 
 **Phase 2 status:** Functionally complete pending LLM path validation with real API key.
+
+---
+
+### [Phase 2, Step 4] Global configuration and slash commands
+**Date:** 2026-03-23
+**Files created:** `~/.claude/.mcp.json` (global MCP server config), `~/.claude/CLAUDE.md` (global session note instruction), `~/.claude/commands/snapshot.md` (`/snapshot` slash command)
+**Files modified:** `README.md` (updated setup instructions from per-project to global-first)
+**Differs from plan:** Not in the original Phase 2 scope, but necessary for the capture pipeline to work across all projects. Previously the MCP server and CLAUDE.md instruction were only per-project — moved to global `~/.claude/` so session notes are captured in every session regardless of working directory.
+**Key decisions:**
+1. **Global over per-project config.** MCP server at `~/.claude/.mcp.json` and instructions at `~/.claude/CLAUDE.md` work in all projects. Per-project setup remains as a documented fallback.
+2. **Removed premature `/context` command.** The existing `cm_context` serves old playbook/CASS data. Proper context retrieval (FTS + knowledge pages) is Phase 4 work. Added `/snapshot` only.
+3. **Main agent writes notes, not a separate agent.** The agent in conversation has full context and produces higher quality notes than a separate agent reconstructing from transcript. PreCompact hook remains as LLM safety net for missed sessions.
+**Gotchas encountered:**
+- Slash commands in Claude Code run inside the current conversation with full chat context — they're prompt templates expanded in-place, not separate processes
+- MCP server config requires a session restart to take effect (Claude Code loads MCP servers at session start)
+- `/context` would have called the old CASS retrieval system, which returns stale data irrelevant to the new pipeline — deferred to Phase 4
+**Open questions:**
+- MCP tool compliance: Does the CLAUDE.md instruction reliably trigger proactive `cm_snapshot` calls? Needs real-world testing across multiple sessions.
+
+---
+
+## Phase 3: Reflection Pipeline
+
+### [Phase 3, Step 1] Types — Reflector output schemas
+**Date:** 2026-03-23
+**Files changed:** `src/types.ts`
+**New schemas:** `ReflectorCall1OutputSchema`, `ReflectorCall2OutputSchema`, `DiaryFromNoteOutputSchema`, `ReflectorQualityTelemetrySchema`, `KnowledgePageSectionSchema`, `ParsedKnowledgePageSchema`
+**Differs from plan:** No
+**Gotchas encountered:** None — all 68 existing type tests pass unchanged
+**Open questions:** None
+
+### [Phase 3, Step 2] Diary-from-note + LLM prompts
+**Date:** 2026-03-23
+**Files changed:** `src/diary.ts` (added `generateDiaryFromNote()`), `src/llm.ts` (added `diaryFromNote`, `reflectorCall1`, `reflectorCall2` prompts + `extractDiaryFromNote()`, `runReflectorCall1()`, `runReflectorCall2()` functions)
+**Differs from plan:** No. Used existing `generateObjectSafe` + `llmWithRetry` pattern. Prompts follow Option C (focused, no examples) from collaborative review with user.
+**Gotchas encountered:** None
+**Open questions:** Prompts need real LLM validation (same as Phase 2 — requires API key)
+
+### [Phase 3, Step 3] Two-call Reflector in reflect.ts
+**Date:** 2026-03-23
+**Files changed:** `src/reflect.ts` (added `TwoCallReflectionResult`, `formatTopicsForPrompt()`, `reflectOnSessionTwoCalls()`)
+**Differs from plan:** No. Call 1 and Call 2 fail independently. Call 2 merges Call 1's proposed topics into available list in-memory. Cold start adds `general` catch-all topic.
+**Gotchas encountered:**
+- `related_bullet_indices` from Call 2 resolved to provisional `pending-N` references since actual bullet IDs are assigned by Curator later
+**Open questions:** None
+
+### [Phase 3, Step 4] Three-source Validator
+**Date:** 2026-03-23
+**Files changed:** `src/validate.ts` (added `evidenceCountGateFromNotes()`, `validateKnowledgeDelta()`, `upgradeConfidence()`)
+**Differs from plan:** No. Three sources: session note bodies (pattern matching), SQLite FTS transcripts (keyword search), source count heuristic. Confidence only upgrades, never downgrades.
+**Gotchas encountered:**
+- `openSearchIndex()` may fail if search.db doesn't exist yet — wrapped in try/catch to gracefully skip source 3
+**Open questions:** None
+
+### [Phase 3, Step 5] Curator + knowledge page I/O
+**Date:** 2026-03-23
+**Files created:** `src/knowledge-page.ts`
+**Files changed:** `src/curate.ts` (added `curateKnowledge()` handling 3 delta types)
+**Implementation details:**
+- `knowledge-page.ts`: parseKnowledgePage with 3-line lookahead for HTML comment metadata, serializeKnowledgePage for roundtrip, loadKnowledgePage/writeKnowledgePage with locking + atomic write, appendSectionToPage with source-session-ID dedup, topics.json CRUD, digest file append
+- `curate.ts`: `curateKnowledge()` is fully deterministic (no LLM). Handles `knowledge_page_append` (delegates to appendSectionToPage), `digest_update` (delegates to appendToDigest), `topic_suggestion` (delegates to addTopicSuggestion)
+**Differs from plan:** No
+**Gotchas encountered:**
+- HTML comment metadata format: `<!-- id: X | confidence: Y | source: Z | added: D | related_bullets: B -->`. Parser uses 3-line lookahead after `## Heading` to find metadata comments (handles blank lines between heading and comment)
+- Dedup key is source session ID, not semantic similarity (per architecture plan)
+**Open questions:** None
+
+### [Phase 3, Step 6] Orchestrator wiring
+**Date:** 2026-03-23
+**Files changed:** `src/orchestrator.ts` (extended `ReflectionOutcome`, added Phase 3 knowledge reflection pipeline after existing playbook pipeline), `src/session-notes.ts` (added `findUnprocessedSessionNotes()`, `markSessionNoteProcessed()`)
+**Pipeline flow:** find unprocessed notes → per-note: diary from note → load knowledge pages → two-call reflect → validate both delta types → curate knowledge → re-index SQLite → mark processed
+**Differs from plan:** No — used Modified Option A (in-place with surgical seams) as decided during planning
+**Gotchas encountered:** None — all 7 existing orchestrator tests pass unchanged
+**Open questions:** None
+
+### [Phase 3, Step 7] Tests
+**Date:** 2026-03-23
+**Files created:** `test/phase3-reflect.test.ts` (10 tests), `test/phase3-validate.test.ts` (14 tests), `test/knowledge-page.test.ts` (17 tests)
+**Differs from plan:** No
+**Gotchas encountered:**
+- Mock LLMIO detection: `JSON.stringify(zodSchema)` does not produce readable field names. Fixed by using a call counter to distinguish Call 1 from Call 2 invocations.
+- "Call 1 failure" test: `generateObjectSafe` retries up to 3 times before propagating the error, so the mock needed to throw on calls 1-3 (not just call 1) for the error to reach reflectOnSessionTwoCalls's catch block.
+**Open questions:** None
+
+---
+
+## Phase 3 Validation Summary
+
+**Test results:** 2383 pass, 47 fail (all pre-existing serve module), 3 skip
+**Baseline before Phase 3:** 2356 pass, 47 fail
+**Delta:** +41 pass (10 reflect + 14 validate + 17 knowledge-page), +0 fail
+**New test files:** `test/phase3-reflect.test.ts`, `test/phase3-validate.test.ts`, `test/knowledge-page.test.ts`
+**No regressions introduced.**
+
+**Phase 3 status:** Functionally complete pending LLM validation with real API key.
+
+---
+
+### [Phase 4] Context Retrieval + Topic System — Complete Build
+**Date:** 2026-03-24
+**Files changed:**
+- `src/types.ts` — Added KnowledgeSearchHitSchema, TopicExcerptSchema, RecentSessionSchema, RelatedTopicSchema, ReviewQueueItemSchema (discriminated union), ReviewQueueSchema. Extended ContextResultSchema (renamed historySnippets→searchResults, added Phase 4 optional fields). Extended ProcessingStateSchema (lastPeriodicJobRun, lastIndexUpdate).
+- `src/commands/context.ts` — Core rewrite: replaced cass binary search with SQLite FTS via searchKnowledgeBase(), added topic excerpt assembly, related topics by semantic similarity, unprocessed session notes, suggested deep dives, lastReflectionRun. Updated CLI formatters.
+- `src/review-queue.ts` — NEW: loadReviewQueue, saveReviewQueue, appendReviewItems (dedup by composite key), dismissReviewItem, approveReviewItem.
+- `src/knowledge-page.ts` — Added addTopic, removeTopic, listTopicsWithMetadata, coldStartTopic (embeds description, searches existing knowledge).
+- `src/commands/topic.ts` — NEW: CLI for topic add/list/remove.
+- `src/cm.ts` — Registered topic command, added --full flag to reflect command.
+- `src/orchestrator.ts` — Extended re-indexing to include session notes + digests + lastIndexUpdate timestamp.
+- `src/periodic-job.ts` — NEW: lock (tryAcquire/release with stale detection >15min), timer (shouldRunPeriodicJob), full pipeline (runPeriodicJob), background trigger (maybeRunPeriodicJobBackground).
+- `src/commands/mcp-stdio.ts` — Wired periodic job background trigger at MCP server start.
+- `src/commands/serve.ts` — Added cm_detail tool (path traversal security, section extraction), cm_search tool (FTS + playbook search, scope filtering, transcript 0.5x ranking), updated cm_context/cm_feedback descriptions. Added 5 MCP resources (cm://topics, cm://knowledge/{topic}, cm://digest/{date}, cm://today, cm://status). Restructured handleResourceRead to prefix-based matching.
+- `src/commands/reflect.ts` — Added --full flag invoking runPeriodicJob().
+- `src/utils.ts` — Mechanical rename: historySnippets→searchResults.
+- `test/phase4-context.test.ts` — NEW: 15 tests for extended context retrieval.
+- `test/phase4-search.test.ts` — NEW: 29 tests for cm_search and cm_detail MCP tools.
+- `test/phase4-topics.test.ts` — NEW: 12 tests for topic CRUD and review queue.
+- `test/phase4-periodic-job.test.ts` — NEW: 7 tests for lock, timer, state.
+- Various test files — Mechanical renames (historySnippets→searchResults, HISTORY→KNOWLEDGE).
+
+**Differs from plan:** Minor differences:
+1. `memory_search` kept as full deprecated alias (still routes to legacy cass search) rather than delegating to cm_search, for backward compatibility.
+2. cm_detail returns structured section metadata (id, confidence, source, added) rather than a generic metadata object.
+3. cm://today returns a "No digest found" message instead of erroring when no digest exists.
+
+**Gotchas encountered:**
+- `loadKnowledgePage()` returns `ParsedKnowledgePage | null`, not a raw string — need `serializeKnowledgePage()` for cm://knowledge resource.
+- KnowledgePageSection has `content` field, not `body` — caught during test writing.
+- Playbook schema_version is `2` (number), not `"1.0"` (string). Tests using raw YAML must match this or use the factory.
+- `historySnippets` rename touched ~7 source and test files. All mechanical.
+- Pre-existing test failures (47→46 fail): one pre-existing failure was fixed incidentally.
+
+**Open questions:** None.
+
+---
+
+## Phase 4 Validation Summary
+
+**Test results:** 2461 pass, 46 fail (pre-existing serve module), 3 skip
+**Baseline before Phase 4:** 2397 pass, 47 fail
+**Delta:** +64 pass (15 context + 29 search + 12 topics + 7 periodic-job + 1 pre-existing fix), -1 fail
+**New test files:** `test/phase4-context.test.ts`, `test/phase4-search.test.ts`, `test/phase4-topics.test.ts`, `test/phase4-periodic-job.test.ts`
+**No regressions introduced.**
+
+**Phase 4 status:** Functionally complete. All 10 build steps implemented.
+
+---
+
+## Phase 5: Electron App
+
+### [Phase 5, Pre-work] Backend additions for Electron
+**Date:** 2026-03-24
+**Files created:** `src/user-notes.ts`, `src/starred.ts`
+**Files modified:** `src/types.ts` (added `UserFlagItemSchema`), `src/review-queue.ts` (added `flagContent()`, updated `compositeKey()`)
+**Differs from plan:** No.
+**Implementation details:**
+- `src/user-notes.ts`: Full CRUD — createUserNote, loadUserNote, saveUserNote, deleteUserNote, listUserNotes. YAML frontmatter + markdown body, withLock + atomicWrite. IDs: `note-{timestamp36}-{random6}`.
+- `src/starred.ts`: Separate `~/.memory-system/starred.json` index (not frontmatter). starItem/unstarItem/isStarred/loadStarred. Dedup by composite `path::section` key.
+- `UserFlagItemSchema`: Added to ReviewQueueItemSchema discriminated union. Fields: type "user_flag", target_path, target_section?, reason?, target_topic (default "").
+- `flagContent()`: Creates user_flag item, appends via appendReviewItems with dedup.
+**Gotchas encountered:** None.
+**Open questions:** None.
+
+### [Phase 5a] Electron App — Core Browse + Search + Edit
+**Date:** 2026-03-24
+**Files created (35+ new):**
+- `electron/package.json`, `electron/tsconfig.json`, `electron/tsconfig.node.json`, `electron/electron.vite.config.ts`
+- `electron/src/main/index.ts` — App lifecycle, BrowserWindow, security (contextIsolation: true, nodeIntegration: false)
+- `electron/src/main/ipc-handlers.ts` — 20 IPC handlers
+- `electron/src/main/file-reader.ts` — 12 reader functions + ported frontmatter/knowledge page parsers
+- `electron/src/main/search.ts` — better-sqlite3 readonly FTS5 search across 5 tables
+- `electron/src/main/cli-bridge.ts` — `bun run src/cm.ts ... --json` for topic/reflect operations
+- `electron/src/main/file-ops.ts` — Direct file mutations for review queue, starred, user notes
+- `electron/src/main/watcher.ts` — chokidar with 500ms debounce, ignores lock/cache/tmp
+- `electron/src/main/types.ts` — Display-oriented TypeScript interfaces
+- `electron/src/preload/index.ts` — contextBridge with ~25 typed methods
+- `electron/src/renderer/main.tsx` — React 19 + TanStack Query (staleTime: 10s)
+- `electron/src/renderer/App.tsx` — Full layout: search bar, sidebar, content router, status bar
+- `electron/src/renderer/stores/ui-store.ts` — Zustand
+- `electron/src/renderer/hooks/` — 7 TanStack Query hooks
+- `electron/src/renderer/components/layout/` — SearchBar, Sidebar, StatusBar
+- `electron/src/renderer/components/sidebar/` — EncyclopediaTab, RecentTab
+- `electron/src/renderer/components/content/` — MarkdownRenderer, KnowledgePage, SessionNote, DigestView, Editor
+- `electron/src/renderer/lib/formatters.ts` — Date/time formatting utilities
+- `electron/src/renderer/styles/global.css` — Full "Archival Precision" design system
+
+**Differs from plan:** No major deviations.
+1. `better-sqlite3` search opens db in readonly mode (plan didn't specify).
+2. CLI bridge resolves repo root relative to __dirname (more portable than hardcoded path).
+3. File-ops module added for direct mutations (review queue, starred, user notes) — plan assumed CLI for all writes, but these are simple JSON/markdown ops that don't need the pipeline.
+
+**Gotchas encountered:**
+- better-sqlite3 native compilation on macOS requires `SDKROOT=$(xcrun --show-sdk-path) LDFLAGS="-L$(xcrun --show-sdk-path)/usr/lib" npm install` when Xcode CLT and Xcode.app have mismatched SDK paths. Standard `npm install` fails with "stdio.h not found" then "library 'c++' not found".
+- electron-vite build must run from the `electron/` directory, not the repo root.
+- Google Fonts import in CSS works in dev but may need inlining for production/offline use.
+
+**Open questions:** None.
+
+### [Phase 5b] Electron App — User Actions + Review Queue
+**Date:** 2026-03-24
+**Files created:**
+- `electron/src/renderer/components/actions/ActionToolbar.tsx` — Hover toolbar: verify (rewrites confidence metadata), invalidate (opens dialog), flag (opens dialog), star (toggles)
+- `electron/src/renderer/components/actions/InvalidateDialog.tsx` — Modal with reason text, wraps section in [INVALIDATED] annotation
+- `electron/src/renderer/components/actions/FlagDialog.tsx` — Modal with optional reason, calls flagContent IPC
+- `electron/src/renderer/components/sidebar/ReviewQueueTab.tsx` — Pending items list + useReviewCount() for badge
+- `electron/src/renderer/components/sidebar/StarredTab.tsx` — Starred items with unstar + navigate
+- `electron/src/renderer/components/sidebar/MyNotesTab.tsx` — User notes list + "+ New Note"
+- `electron/src/renderer/components/content/ReviewQueue.tsx` — Grouped by type, approve/dismiss actions
+- `electron/src/renderer/components/content/UserNote.tsx` — Inline title editing, delete confirmation
+- `electron/src/renderer/hooks/use-review-queue.ts`, `use-starred.ts`, `use-user-notes.ts`
+
+**Files modified:**
+- `electron/src/renderer/stores/ui-store.ts` — Extended SidebarTab (5 tabs), ContentView (7 types), added dialog state
+- `electron/src/renderer/components/layout/Sidebar.tsx` — 5 tabs, review badge count
+- `electron/src/renderer/components/content/KnowledgePage.tsx` — ActionToolbar on section hover
+- `electron/src/renderer/App.tsx` — Routes user-note + review-queue, renders dialogs at root
+- `electron/src/renderer/styles/global.css` — +8KB for action toolbar, dialog/modal, review queue, user notes, sidebar badge
+
+**Differs from plan:** B6 (Undo UI) deferred — undo.ts only handles playbook bullets, not knowledge base rollback. The plan's "last reflection timestamp + undo button" is in the StatusBar already (last reflection time + Run Reflection button). Full undo will need a new snapshot mechanism.
+
+**Gotchas encountered:** None.
+
+**Open questions:** None.
+
+---
+
+### [Phase 5c] Electron App — Claude Dialog + Polish
+**Date:** 2026-03-24
+**Files created:**
+- `electron/src/main/claude.ts` — Anthropic API integration: conversation state management, 2 locally-fulfilled tools (search_knowledge_base via better-sqlite3, read_document via file-reader), agentic loop handling multi-turn tool_use (max 5 iterations), system prompt with optional document context from current view.
+- `electron/src/renderer/components/claude/ClaudeDialog.tsx` — Collapsible panel (Cmd+J toggle), claudeAvailable() check on mount, chat history with markdown rendering (reuses MarkdownRenderer), tool usage badges, thinking dot animation, textarea input with Enter-to-send/Shift+Enter for newline, reset conversation button.
+
+**Files modified:**
+- `electron/src/main/ipc-handlers.ts` — Added 3 IPC handlers: claude-available, claude-send, claude-reset. Added import from claude.ts.
+- `electron/src/preload/index.ts` — Exposed claudeAvailable(), claudeSend(message, documentContext?), claudeReset() via contextBridge.
+- `electron/src/renderer/App.tsx` — Added ClaudeDialog between content and status bar.
+- `electron/src/renderer/components/layout/StatusBar.tsx` — Added animated progress bar (2px amber sweep) visible when isReflecting is true.
+- `electron/src/renderer/styles/global.css` — Updated grid layout to 4 rows (added claude area). Added ~200 lines: Claude panel (toggle, body, messages, input), message bubbles (user right-aligned/assistant left-aligned), tool badges, thinking dots animation, progress bar sweep animation.
+- `electron/package.json` — Added `@anthropic-ai/sdk` dependency.
+
+**Differs from plan:**
+1. C2 (Related Topics panel) deferred — requires semantic.ts integration or embedding cache reads, lower priority than core functionality.
+2. C4 (Packaging) deferred — electron-builder config for distribution, not needed for personal use.
+3. Claude dialog uses `claude-sonnet-4-20250514` model (hardcoded) — could be made configurable.
+
+**Gotchas encountered:**
+- The Anthropic SDK is imported in the main process (Node.js), not the renderer. This is correct — API keys should never be in the renderer process.
+- Tool fulfillment happens locally in the main process: search_knowledge_base calls the same better-sqlite3 search function, read_document calls the same file-reader functions. No additional IPC roundtrip needed.
+- Grid layout changed from 3 rows to 4 rows to accommodate the Claude panel. The panel collapses to just the toggle bar (~28px) when closed.
+
+**Open questions:** None.
+
+---
+
+## Phase 5 Validation Summary
+
+**Test results:** 2461 pass, 46 fail (pre-existing), 3 skip — unchanged from Phase 4.
+**Electron app is a separate build** — does not affect bun test suite.
+**Build outputs:** main (31KB), preload (2.8KB), renderer (1.4MB), CSS (37KB).
+**Phase 5 status:** 5a/5b/5c functionally complete. C2 (Related Topics) and C4 (Packaging) deferred. Pending manual testing with real data.

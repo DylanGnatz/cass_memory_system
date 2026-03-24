@@ -535,6 +535,60 @@ export function sessionNotePath(sessionId: string, config: Config): string {
   return path.join(expandPath(config.sessionNotesDir), `${sessionId}.md`);
 }
 
+/**
+ * Find session notes that haven't been processed by the reflection pipeline.
+ * Returns parsed notes with processed: false, sorted by creation date (oldest first).
+ */
+export async function findUnprocessedSessionNotes(
+  config: Config,
+  maxNotes = 10
+): Promise<ParsedSessionNote[]> {
+  const dir = expandPath(config.sessionNotesDir);
+  const results: ParsedSessionNote[] = [];
+
+  try {
+    const files = await fs.readdir(dir);
+    const mdFiles = files.filter(f => f.endsWith(".md"));
+
+    for (const file of mdFiles) {
+      if (results.length >= maxNotes) break;
+      try {
+        const raw = await fs.readFile(path.join(dir, file), "utf-8");
+        const note = parseSessionNote(raw);
+        if (!note.frontmatter.processed) {
+          results.push(note);
+        }
+      } catch {
+        // Skip malformed notes
+      }
+    }
+
+    // Sort oldest first (process in chronological order)
+    results.sort((a, b) =>
+      new Date(a.frontmatter.created).getTime() - new Date(b.frontmatter.created).getTime()
+    );
+  } catch {
+    // session-notes dir may not exist yet
+  }
+
+  return results;
+}
+
+/**
+ * Mark a session note as processed by updating its frontmatter.
+ */
+export async function markSessionNoteProcessed(
+  sessionId: string,
+  config: Config
+): Promise<void> {
+  const note = await loadSessionNote(sessionId, config);
+  if (!note) return;
+
+  note.frontmatter.processed = true;
+  note.frontmatter.last_updated = new Date().toISOString();
+  await writeSessionNote(sessionId, note.frontmatter, note.body, config);
+}
+
 // ============================================================================
 // SESSION NOTE GENERATION
 // ============================================================================

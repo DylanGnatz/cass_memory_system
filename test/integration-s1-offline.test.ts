@@ -65,10 +65,10 @@ describe("S1 Offline Smoke (no cass, no LLM)", () => {
     const ctx = await runCm(["context", "hello world", "--json"]);
     expect(ctx.exitCode).toBe(0);
     const ctxOut = ctx.stdout.toString();
-    // In degraded mode, historySnippets should be empty; parse json result
+    // In degraded mode, searchResults should be empty; parse json result
     const parsed = JSON.parse(ctxOut) as any;
     expect(parsed.data.task).toBe("hello world");
-    expect(parsed.data.historySnippets.length).toBe(0);
+    expect(parsed.data.searchResults.length).toBe(0);
 
     // 3) add rule
     const add = await runCm(["playbook", "add", "Always write atomically", "--category", "io", "--json"]);

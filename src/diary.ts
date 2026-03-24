@@ -10,9 +10,10 @@ import {
   RelatedSessionSchema,
   SanitizationConfig
 } from "./types.js";
-import { 
-  extractDiary, 
-  generateSearchQueries 
+import {
+  extractDiary,
+  extractDiaryFromNote,
+  generateSearchQueries
 } from "./llm.js";
 import { 
   safeCassSearch, 
@@ -500,6 +501,68 @@ export async function generateDiary(
   }
   
   return generateDiaryFromContent(sessionPath, sanitizedContent, config);
+}
+
+// --- Phase 3: Diary from Session Note ---
+
+/**
+ * Generate a diary entry from a session note (no cass binary required).
+ * This is the Phase 3 replacement for generateDiary(), which uses cassExport.
+ * Reads the session note body and calls the LLM to produce structured fields,
+ * or uses fast heuristic extraction when LLM is unavailable.
+ */
+export async function generateDiaryFromNote(
+  sessionNoteId: string,
+  sessionNoteBody: string,
+  sessionNoteAbstract: string,
+  sessionNoteTopics: string[],
+  config: Config
+): Promise<DiaryEntry> {
+  const sessionPath = `session-notes/${sessionNoteId}.md`;
+
+  // Fast path when LLMs are disabled
+  if (process.env.CASS_MEMORY_LLM === "none") {
+    return generateDiaryFastFromContent(sessionPath, sessionNoteBody, config);
+  }
+
+  log(`Generating diary from session note ${sessionNoteId}...`);
+
+  // LLM extraction
+  const extracted = await extractDiaryFromNote(
+    {
+      id: sessionNoteId,
+      abstract: sessionNoteAbstract,
+      topicsTouched: sessionNoteTopics,
+      body: sessionNoteBody,
+    },
+    config
+  );
+
+  // Assemble entry
+  const diary: DiaryEntry = {
+    id: generateDiaryId(sessionPath, sessionNoteBody),
+    sessionPath,
+    timestamp: now(),
+    agent: "claude", // session notes are always from Claude Code
+    workspace: undefined,
+    status: extracted.status,
+    accomplishments: extracted.accomplishments || [],
+    decisions: extracted.decisions || [],
+    challenges: extracted.challenges || [],
+    preferences: extracted.preferences || [],
+    keyLearnings: extracted.keyLearnings || [],
+    tags: extracted.tags || [],
+    searchAnchors: extractKeywords(
+      [...(extracted.keyLearnings || []), ...(extracted.challenges || [])].join(" ")
+    ),
+    relatedSessions: [],
+  };
+
+  // Save
+  await saveDiary(diary, config);
+  log(`Saved diary from note to ${expandPath(config.diaryDir)}/${diary.id}.json`);
+
+  return diary;
 }
 
 // --- Persistence ---

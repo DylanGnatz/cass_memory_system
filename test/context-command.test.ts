@@ -304,7 +304,7 @@ describe("buildContextResult", () => {
     expect(result.task).toBe("test task");
     expect(result.relevantBullets).toHaveLength(2);
     expect(result.antiPatterns).toHaveLength(1);
-    expect(result.historySnippets).toHaveLength(1);
+    expect(result.searchResults).toHaveLength(1);
     expect(result.deprecatedWarnings).toEqual(["Test warning"]);
     expect(result.suggestedCassQueries).toEqual(["cass search 'test'"]);
   });
@@ -334,7 +334,7 @@ describe("buildContextResult", () => {
 
     const result = buildContextResult("test", [], [], history as any, [], [], { maxBullets: 10, maxHistory: 3 });
 
-    expect(result.historySnippets).toHaveLength(3);
+    expect(result.searchResults).toHaveLength(3);
   });
 
   test("truncates long snippets", () => {
@@ -350,9 +350,9 @@ describe("buildContextResult", () => {
 
     const result = buildContextResult("test", [], [], history as any, [], [], { maxBullets: 10, maxHistory: 10 });
 
-    expect(result.historySnippets[0].snippet.length).toBeLessThan(500);
+    expect(result.searchResults[0].snippet.length).toBeLessThan(500);
     // truncateWithIndicator uses "..." as the default indicator
-    expect(result.historySnippets[0].snippet).toContain("...");
+    expect(result.searchResults[0].snippet).toContain("...");
   });
 
   test("adds lastHelpful and reasoning to bullets", () => {
@@ -376,7 +376,7 @@ describe("buildContextResult", () => {
     expect(result.task).toBe("test");
     expect(result.relevantBullets).toEqual([]);
     expect(result.antiPatterns).toEqual([]);
-    expect(result.historySnippets).toEqual([]);
+    expect(result.searchResults).toEqual([]);
     expect(result.deprecatedWarnings).toEqual([]);
     expect(result.suggestedCassQueries).toEqual([]);
   });
@@ -412,7 +412,7 @@ describe("contextWithoutCass", () => {
         const result = await contextWithoutCass("write unit tests", config);
 
         expect(result.task).toBe("write unit tests");
-        expect(result.historySnippets).toEqual([]);
+        expect(result.searchResults).toEqual([]);
         expect(result.deprecatedWarnings).toContain("Context generated without historical data (cass unavailable)");
       } finally {
         capture.restore();
@@ -937,7 +937,7 @@ describe("contextCommand markdown output", () => {
     });
   });
 
-  test("markdown output shows history section placeholder", async () => {
+  test("markdown output shows search results section placeholder", async () => {
     await withTempCassHome(async (env) => {
       writeFileSync(env.playbookPath, yaml.stringify(createTestPlaybook([])));
 
@@ -946,7 +946,7 @@ describe("contextCommand markdown output", () => {
         await contextCommand("test task", { format: "markdown" });
         const output = capture.getOutput();
 
-        expect(output).toContain("## History");
+        expect(output).toContain("## Search Results");
       } finally {
         capture.restore();
       }
@@ -1074,7 +1074,7 @@ describe("contextCommand human output", () => {
     });
   });
 
-  test("human output shows HISTORY section or degraded warning when empty", async () => {
+  test("human output shows KNOWLEDGE section or degraded warning when empty", async () => {
     await withTempCassHome(async (env) => {
       writeFileSync(env.playbookPath, yaml.stringify(createTestPlaybook([])));
 
@@ -1083,11 +1083,11 @@ describe("contextCommand human output", () => {
         await contextCommand("test task", {});
         const output = capture.getOutput();
 
-        // When cass is available but empty, shows "HISTORY (0)"
-        // When cass is unavailable/degraded, shows warning about local history
-        const hasHistorySection = output.includes("HISTORY (0)") || output.includes("HISTORY (");
-        const hasDegradedWarning = output.includes("Local history unavailable");
-        expect(hasHistorySection || hasDegradedWarning).toBe(true);
+        // When search.db is available but empty, shows "KNOWLEDGE (0)"
+        // When search is unavailable/degraded, shows warning
+        const hasKnowledgeSection = output.includes("KNOWLEDGE (0)") || output.includes("KNOWLEDGE (") || output.includes("KNOWLEDGE");
+        const hasDegradedWarning = output.includes("Knowledge search unavailable");
+        expect(hasKnowledgeSection || hasDegradedWarning).toBe(true);
       } finally {
         capture.restore();
       }

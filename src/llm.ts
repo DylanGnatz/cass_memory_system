@@ -8,7 +8,8 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOllama } from "ollama-ai-provider";
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
-import type { Config, DiaryEntry, LLMProvider } from "./types.js";
+import type { Config, DiaryEntry, LLMProvider, ReflectorCall1Output, ReflectorCall2Output, DiaryFromNoteOutput } from "./types.js";
+import { ReflectorCall1OutputSchema, ReflectorCall2OutputSchema, DiaryFromNoteOutputSchema } from "./types.js";
 import { checkBudget, recordCost } from "./cost.js";
 import { truncateForContext, warn } from "./utils.js";
 
@@ -410,6 +411,117 @@ Respond with JSON:
   "topics_touched": ["all-topic-slugs", "including-new-ones"],
   "new_content": "ONLY the new section(s) to append"
 }`,
+
+  diaryFromNote: `You are generating a structured diary entry from a session note. The diary entry is an internal scaffold used by the Reflector to identify patterns and generate knowledge. It should be a compressed structural summary, NOT a rewrite of the note.
+
+SESSION NOTE (frontmatter):
+- Session: {sessionId}
+- Topics: {topicsTouched}
+- Abstract: {abstract}
+
+<session_note_body>
+{noteContent}
+</session_note_body>
+
+INSTRUCTIONS:
+Map the session note into these fields. Be SPECIFIC — include file names, error messages, config paths. Do not add information that isn't in the note.
+
+- status: "success" if the session achieved its goals, "failure" if blocked/unresolved, "mixed" if partial
+- accomplishments: Concrete completed tasks (1 bullet each, max 8)
+- decisions: Design choices with brief rationale (max 5)
+- challenges: Problems encountered, dead ends, blockers (max 5)
+- preferences: User workflow preferences or style choices revealed
+- keyLearnings: Insights reusable in future sessions (max 5)
+- tags: 3-8 keyword tags for search discovery`,
+
+  reflectorCall1: `You are extracting reusable rules and topic classifications from a coding session.
+
+<diary_entry>
+Status: {status}
+Accomplishments:
+{accomplishments}
+Decisions:
+{decisions}
+Challenges:
+{challenges}
+Key Learnings:
+{keyLearnings}
+</diary_entry>
+
+<existing_topics>
+{existingTopics}
+</existing_topics>
+
+<existing_playbook>
+{existingBullets}
+</existing_playbook>
+
+INSTRUCTIONS — BULLETS:
+Extract playbook bullet proposals from this session. Each bullet is a terse, reusable rule.
+
+Quality criteria:
+- SPECIFIC: Bad: "Write tests". Good: "For React hooks, test effects separately with renderHook"
+- ACTIONABLE: Include concrete file patterns, command flags, config paths
+- REUSABLE: Would help a DIFFERENT agent on a similar problem in the future
+- NOT REDUNDANT: Check existing_playbook — don't propose rules already covered
+
+Bullet fields:
+- content: The rule text (1-2 sentences max)
+- scope: "global" (any project), "workspace" (this repo), "language", "framework", or "task"
+- category: Short category label (e.g. "testing", "deployment", "error-handling")
+- type: "pattern" (do this) or "anti-pattern" (don't do this)
+- kind: "learned" (discovered during work) or "prescribed" (user stated preference)
+- reasoning: Why this bullet is worth extracting (1 sentence)
+
+Maximum 10 bullets. Prefer fewer, higher-quality bullets over many weak ones.
+
+INSTRUCTIONS — TOPIC SUGGESTIONS:
+If the session covered knowledge that doesn't fit any existing topic, suggest new topics. Only suggest topics that represent a coherent, recurring subject area — not one-off tasks.
+
+Topic fields:
+- slug: kebab-case identifier (e.g. "billing-webhooks")
+- name: Human-readable name (e.g. "Billing Webhooks")
+- description: 1-sentence description of what this topic covers
+- reasoning: Why this should be a standalone topic
+
+Maximum 3 topic suggestions. Most sessions need 0.`,
+
+  reflectorCall2: `You are adding new knowledge from a coding session to a wiki-style knowledge base.
+
+CRITICAL: Your primary source is the session note below. The existing knowledge pages are context for avoiding redundancy and contradictions. Extract NEW information from the session — do NOT paraphrase or restate what's already on the knowledge pages.
+
+<diary_entry>
+{diaryText}
+</diary_entry>
+
+<session_note>
+{sessionNote}
+</session_note>
+
+<existing_knowledge_pages>
+{knowledgePages}
+</existing_knowledge_pages>
+
+<available_topics>
+{availableTopics}
+</available_topics>
+
+KNOWLEDGE SECTIONS:
+Each section you write will be APPENDED to a topic's knowledge page (one markdown file per topic at knowledge/{topic-slug}.md). If the page already exists, your section is added after existing sections. If the page doesn't exist yet, it will be created with your section as the first entry.
+
+Route sections to topic slugs from <available_topics>. Always pick the best-fit topic — slightly misrouted knowledge is better than dropped knowledge. Never omit a section because the topic fit isn't perfect.
+
+For each section, provide:
+- topic_slug: Which topic page it belongs on
+- section_title: Short heading (e.g. "Webhook HMAC Validation", "FTS5 Configuration")
+- content: Detailed, factual prose (2-6 sentences) that would help someone working in this area. Include specific paths, configs, error messages, commands. Add source references where relevant (e.g. "Learned: Session {sessionId}", links, ticket numbers).
+- confidence: "verified" (confirmed working), "inferred" (reasonable but untested), "uncertain" (ambiguous)
+- related_bullet_indices: Which bullets from the structural extraction relate to this section (0-based indices)
+
+Skip ephemeral facts (local env state, one-off debug output, current version numbers that will change). Only write sections for genuinely new information not already covered in existing pages.
+
+DIGEST:
+Write a single paragraph (2-4 sentences) summarizing this session for the daily digest file (digests/YYYY-MM-DD.md). Each session contributes one paragraph — yours will be appended alongside others from today. Focus on outcomes and decisions, not process.`,
 } as const;
 
 export function fillPrompt(
@@ -869,6 +981,96 @@ export async function extendSessionNoteContent(
   return llmWithRetry(async () => {
     return generateObjectSafe(SessionNoteAppendOutputSchema, prompt, config, 3, io);
   }, "extendSessionNoteContent");
+}
+
+// --- Phase 3: Diary From Note ---
+
+export async function extractDiaryFromNote(
+  sessionNote: { id: string; abstract: string; topicsTouched: string[]; body: string },
+  config: Config,
+  io: LLMIO = DEFAULT_LLM_IO
+): Promise<DiaryFromNoteOutput> {
+  const safeContent = truncateForContext(sessionNote.body, { maxChars: 30000 });
+
+  const prompt = fillPrompt(PROMPTS.diaryFromNote, {
+    sessionId: sessionNote.id,
+    topicsTouched: sessionNote.topicsTouched.join(", ") || "none",
+    abstract: sessionNote.abstract,
+    noteContent: safeContent,
+  });
+
+  return llmWithRetry(async () => {
+    return generateObjectSafe(DiaryFromNoteOutputSchema, prompt, config, 3, io);
+  }, "extractDiaryFromNote");
+}
+
+// --- Phase 3: Reflector Call 1 (Structural/Extractive) ---
+
+export async function runReflectorCall1(
+  diary: DiaryEntry,
+  existingTopics: string,
+  existingBullets: string,
+  config: Config,
+  io: LLMIO = DEFAULT_LLM_IO
+): Promise<ReflectorCall1Output> {
+  // Check for stubs in E2E test mode
+  if (io === DEFAULT_LLM_IO) {
+    const stub = nextReflectorStub<ReflectorCall1Output>();
+    if (stub) return stub;
+  }
+
+  const prompt = fillPrompt(PROMPTS.reflectorCall1, {
+    status: diary.status,
+    accomplishments: diary.accomplishments.length > 0
+      ? diary.accomplishments.map(a => `- ${a}`).join("\n")
+      : "- (none recorded)",
+    decisions: diary.decisions.length > 0
+      ? diary.decisions.map(d => `- ${d}`).join("\n")
+      : "- (none recorded)",
+    challenges: diary.challenges.length > 0
+      ? diary.challenges.map(c => `- ${c}`).join("\n")
+      : "- (none recorded)",
+    keyLearnings: diary.keyLearnings.length > 0
+      ? diary.keyLearnings.map(k => `- ${k}`).join("\n")
+      : "- (none recorded)",
+    existingTopics: truncateForContext(existingTopics, { maxChars: 10000 }),
+    existingBullets: truncateForContext(existingBullets, { maxChars: 20000 }),
+  });
+
+  return llmWithRetry(async () => {
+    return generateObjectSafe(ReflectorCall1OutputSchema, prompt, config, 3, io);
+  }, "runReflectorCall1");
+}
+
+// --- Phase 3: Reflector Call 2 (Generative/Narrative) ---
+
+export async function runReflectorCall2(
+  diary: DiaryEntry,
+  sessionNote: string,
+  knowledgePages: string,
+  availableTopics: string,
+  sessionId: string,
+  config: Config,
+  io: LLMIO = DEFAULT_LLM_IO
+): Promise<ReflectorCall2Output> {
+  const diaryText = `Status: ${diary.status}
+Accomplishments: ${diary.accomplishments.join(", ") || "(none)"}
+Decisions: ${diary.decisions.join(", ") || "(none)"}
+Challenges: ${diary.challenges.join(", ") || "(none)"}
+Key Learnings: ${diary.keyLearnings.join(", ") || "(none)"}
+Tags: ${diary.tags.join(", ") || "(none)"}`;
+
+  const prompt = fillPrompt(PROMPTS.reflectorCall2, {
+    diaryText,
+    sessionNote: truncateForContext(sessionNote, { maxChars: 30000 }),
+    knowledgePages: truncateForContext(knowledgePages, { maxChars: 30000 }),
+    availableTopics,
+    sessionId,
+  });
+
+  return llmWithRetry(async () => {
+    return generateObjectSafe(ReflectorCall2OutputSchema, prompt, config, 3, io);
+  }, "runReflectorCall2");
 }
 
 // --- Multi-Provider Fallback ---

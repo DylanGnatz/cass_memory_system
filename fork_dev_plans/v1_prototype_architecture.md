@@ -31,7 +31,7 @@ This is a 60% direct reuse rate. We're inheriting a working pipeline with battle
 - **output.ts** (224 lines) — Terminal output formatting and styling.
 - **progress.ts** (268 lines) — Progress reporting. Used by the periodic background job to surface status in the Electron app.
 - **llm.ts** (835 lines) — Multi-provider LLM abstraction via Vercel AI SDK (Anthropic, OpenAI, Google, Ollama). Structured output, retries, fallbacks. Depends on `cost.ts` for budget checking — both kept together.
-- **cost.ts** (221 lines) — LLM cost tracking with per-model pricing, daily/monthly budget limits. Essential guardrail for the unsupervised periodic background job. `llm.ts` imports `checkBudget` and `recordCost` directly — cannot be dropped without modifying `llm.ts`. Budget caps prevent runaway LLM costs from the 4-hour reflection cycle.
+- **cost.ts** (221 lines) — LLM cost tracking with per-model pricing, daily/monthly budget limits. Essential guardrail for the unsupervised periodic background job. `llm.ts` imports `checkBudget` and `recordCost` directly — cannot be dropped without modifying `llm.ts`. Budget caps prevent runaway LLM costs from the daily reflection cycle.
 - **playbook.ts** (702 lines) — Playbook CRUD, load/save/merge YAML, bullet management. We keep playbooks, so this works unchanged.
 - **gap-analysis.ts** (298 lines) — Categorizes rules into archetypes, detects coverage gaps. Operates on Playbook type with keyword matching. Useful for review queue. Also adaptable for topic suggestion seeding — can identify topic coverage gaps without an LLM call.
 - **rule-validation.ts** (313 lines) — Semantic validation, category mismatch detection. Operates on playbook bullets via semantic.ts and gap-analysis.ts. Useful for review queue.
@@ -822,7 +822,7 @@ Every markdown document has a **toggle between rendered view and edit mode**. Re
 
 **Related Topics panel** — When viewing a knowledge page, a sidebar panel shows related topics discovered via `similar.ts` semantic search. "This page is related to: Auth Service, API Gateway, Deployment." Zero new code — `similar.ts` already does semantic similarity across playbook bullets; point it at knowledge page sections instead.
 
-**Undo as first-class UI surface** — `undo.ts` (481 lines) has full snapshot/restore with history. For a periodic background job that runs unsupervised every 4 hours, automatic pre-reflection snapshots + one-click rollback is a key trust-building feature. Show last reflection timestamp and "Undo last reflection" button prominently, not buried in slash commands.
+**Undo as first-class UI surface** — `undo.ts` (481 lines) has full snapshot/restore with history. For a periodic background job that runs unsupervised daily, automatic pre-reflection snapshots + one-click rollback is a key trust-building feature. Show last reflection timestamp, "Undo last reflection" button, and "Run Reflection Now" button prominently, not buried in slash commands.
 
 ### User Actions on Content
 
@@ -839,10 +839,13 @@ Available on all content views via a section-level action toolbar (appears on ho
 ## Periodic Background Job
 
 ### Trigger Conditions
-- **Internal timer:** every 4 hours while app is running
-- **On app launch:** if last run was more than 4 hours ago
-- **Manual:** user runs `/reflect` command
+- **Wall-clock timer:** every 24 hours, based on `lastRunTimestamp` in `state.json`
+- **On app launch:** check `if (now - lastRunTimestamp > 24h)` — fires immediately if overdue (e.g., laptop was closed for 6 days → runs on first launch). This is a wall-clock check, not accumulated app-open time.
+- **Manual button in Electron app:** prominent "Run Reflection Now" button in the UI, always available regardless of timer state. Equivalent to CLI `cm reflect`.
+- **Manual CLI:** user runs `cm reflect` command
 - **Never depends on cron or system scheduler** — runs inside the app process
+
+The 24-hour cadence (vs the original 4-hour design) reflects how session notes are actually captured: agents call `cm_snapshot` during conversations, so notes accumulate throughout the day. One daily reflection pass processes all of them in batch, which is more cost-efficient (single preflight check, single index rebuild) and avoids partial-day knowledge fragmentation.
 
 ### Job Steps
 ```
@@ -907,9 +910,10 @@ Available on all content views via a section-level action toolbar (appears on ho
 - Curator: zero LLM tokens (deterministic)
 - Semantic embeddings: zero API tokens (local model via Transformers.js)
 - SQLite indexing: zero API tokens (local)
-- **Estimated total per day (5 active sessions): ~15,000-22,000 tokens**
+- **Estimated total per daily run (5 active sessions): ~15,000-22,000 tokens**
 - Compare to: re-reading full documentation from scratch each session (50,000-200,000 tokens)
-- Budget guardrail: configurable daily/monthly limit via `cost.ts` (default $0.50/day, $10.00/month — original CASS defaults of $0.10/$2.00 are too conservative for the two-call Reflector pipeline with 10+ sessions/day). Job skips LLM steps if budget exceeded.
+- With 24-hour cadence, cost is predictable: one run per day, budget consumed in a single batch
+- Budget guardrail: configurable daily/monthly limit via `cost.ts` (default $0.50/day, $10.00/month). Job skips LLM steps if budget exceeded. Manual "Run Reflection Now" button respects the same budget.
 
 ---
 
@@ -1007,14 +1011,52 @@ Available on all content views via a section-level action toolbar (appears on ho
 ### Phase 3: Reflection Pipeline
 **Goal:** Session notes flow through diary → Reflector → Validator → Curator and produce knowledge pages + bullets.
 
-- Implement diary entry generation from session notes (adapter to CASS DiaryEntry format)
+#### Implementation Decisions (decided 2026-03-23)
+
+**Knowledge page section metadata format: HTML comments.**
+Analyzed 6 alternatives (HTML comments, YAML per section, custom markdown syntax, `<details>` tags, sidecar JSON, heading attributes). HTML comments win on: invisible rendering in all markdown renderers (`react-markdown`, GitHub, Obsidian), simple regex parsing (~30 lines, isomorphic to `parseSessionNote`), roundtrip safety, zero new dependencies, extensibility via `| new_field: value`. One hardening: parser scans forward up to 3 lines past heading for the metadata comment (handles blank lines users may insert). `related_bullets` stored as comma-separated, not YAML array.
+
+```markdown
+## Section Title
+<!-- id: sec-a1b2c3d4 | confidence: verified | source: session-2026-03-20-001 | added: 2026-03-20 | related_bullets: b-20260320-x7k,b-20260321-abc -->
+
+Section prose content here.
+```
+
+**Orchestrator strategy: Modified Option A (in-place refactor with surgical seams).**
+Analyzed 3 approaches (in-place refactor, parallel function, pipeline architecture extraction). In-place wins because: (a) any session generating both playbook bullets and knowledge sections must go through a single pipeline run — two functions means double LLM cost or split-brain, (b) reflect.ts and curate.ts have zero cass imports already, (c) diary.ts already has `generateDiaryFromContent()` as a clean binary-free seam, (d) all 3 orchestrator tests use `options.session` direct injection + `CASS_MEMORY_LLM=none` so they're unaffected by discovery/LLM path changes.
+
+Build order (each step is additive until Step 4):
+1. Add `generateDiaryFromNote()` in diary.ts — new function, zero test impact
+2. Add `evidenceCountGateFromNotes()` in validate.ts — new code path gated on searchDbPath, zero test impact
+3. Add `reflectOnSessionTwoCalls()` in reflect.ts — new function alongside existing, zero test impact
+4. Modify `orchestrateReflection()` to wire the new functions together — targeted test impact
+
+**Prompt strategy: draft multiple options per LLM call, review with user, iterate.**
+
+#### Build Steps
+
+- Extend types.ts with Reflector output schemas (`ReflectorCall1OutputSchema`, `ReflectorCall2OutputSchema`, `DiaryFromNoteOutputSchema`, `ReflectorQualityTelemetrySchema`)
+- Implement `generateDiaryFromNote()` in diary.ts (reads session note, calls `generateDiaryFromContent` seam)
+- Add diary-from-note prompt + LLM function in llm.ts (`diaryFromNote` prompt, `extractDiaryFromNote()`)
 - Split Reflector into two calls in reflect.ts:
+  - `reflectOnSessionTwoCalls()` orchestrates both calls
   - Call 1: structural/extractive (bullets + topic suggestions)
   - Call 2: generative/narrative (knowledge page prose + digest content, with prompt guardrail)
-- Extend Reflector output schemas with new Zod types
-- Extend Curator in curate.ts with new delta handlers (knowledge page append with confidence metadata + stable section IDs, digest write, topic suggestion). Source-session-ID dedup for knowledge sections.
-- Extend orchestrator.ts with new pipeline steps (preflight, budget check, two Reflector calls, SQLite indexing, quality telemetry, drift detection, embedding cache invalidation)
+- Add two new prompts + LLM functions in llm.ts (`reflectorCall1`, `reflectorCall2`)
+- Extend Validator in validate.ts with three-source evidence model:
+  - Source 1: Full session note text (SUCCESS/FAILURE patterns)
+  - Source 2: Knowledge page semantic search via semantic.ts
+  - Source 3: SQLite fts_transcripts (when available)
+  - Source count heuristic: N≥3 independent sessions → higher base confidence
+- Extend Curator in curate.ts with new delta handlers:
+  - `knowledge_page_append`: append section to topic page with HTML comment metadata + stable `sec-{id}` IDs, source-session-ID dedup
+  - `digest_update`: write/append to daily digest file
+  - `topic_suggestion`: add to topics.json with source: "system"
+- Implement knowledge page file I/O: parser (heading + HTML comment scan, 3-line lookahead), serializer, read/write with `withLock()` + `atomicWrite()`
+- Wire orchestrator.ts: replace cass-dependent discovery/export/diary/reflection/validation with session-note-based equivalents, add knowledge delta routing + merge, add preflight budget check, SQLite re-indexing, quality telemetry logging, drift detection, embedding cache invalidation
 - All file writes use withLock() + atomicWrite()
+- Tests for each new function + integration test for full pipeline
 - **Checkpoint:** end-to-end — session transcript → session note → diary entry → reflection → knowledge page + playbook bullet. Manually review knowledge page prose quality and bullet relevance.
 
 ### Phase 4: Context Retrieval + Topic System
@@ -1027,7 +1069,8 @@ Available on all content views via a section-level action toolbar (appears on ho
 - Add MCP resources: cm://knowledge/{topic}, cm://digest/{date}
 - Single-pass retrieval: FTS + semantic ranking, return top-15 (no LLM call)
 - Wire SQLite indexing into periodic job
-- Implement periodic job timer (4-hour interval + on-launch check) with budget guardrails via cost.ts
+- Implement periodic job timer (24-hour wall-clock interval + on-launch catch-up check) with budget guardrails via cost.ts
+- Add "Run Reflection Now" manual trigger (Electron button + CLI `cm reflect`)
 - **Checkpoint:** call cm_context with a task description, verify relevant knowledge returned across all layers including transcript fallback. Start a new Claude Code session, verify the agent receives useful context from previous sessions.
 
 ### Phase 5: Electron App

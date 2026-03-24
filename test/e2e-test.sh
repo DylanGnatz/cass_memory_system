@@ -50,7 +50,7 @@ run_step mark-helpful bun run "$CM_BIN" mark "$BULLET_ID" --helpful --session "e
 TASK="file operations and atomic writes"
 run_step context bun run "$CM_BIN" context "$TASK" --json
 grep "$RULE_CONTENT" "$RUN_DIR/context.out"
-grep '"historySnippets": \[\]' "$RUN_DIR/context.out"
+grep '"searchResults": \[\]' "$RUN_DIR/context.out"
 
 # 6) stats should show total >=1
 run_step stats-after bun run "$CM_BIN" stats --json

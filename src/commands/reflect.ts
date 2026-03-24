@@ -1,5 +1,6 @@
 import { loadConfig } from "../config.js";
 import { orchestrateReflection } from "../orchestrator.js";
+import { runPeriodicJob } from "../periodic-job.js";
 import { getUsageStats, formatCostSummary } from "../cost.js";
 import chalk from "chalk";
 import {
@@ -66,11 +67,95 @@ export async function reflectCommand(
     json?: boolean;
     llm?: boolean; // Ignored, always uses LLM if validation enabled
     session?: string;
+    full?: boolean;
   } = {}
 ): Promise<void> {
   const startedAtMs = Date.now();
   const command = "reflect";
   const cli = getCliName();
+
+  // --full is incompatible with --session
+  if (options.full && options.session) {
+    reportError("--full and --session are incompatible. Use --full for the complete pipeline, or --session for a specific session.", {
+      code: ErrorCode.INVALID_INPUT,
+      json: options.json,
+      command,
+      startedAtMs,
+    });
+    return;
+  }
+
+  // --full: run the complete periodic job pipeline
+  if (options.full) {
+    const config = await loadConfig();
+    const statsBefore = await getUsageStats(config);
+
+    if (!options.json) {
+      console.log(chalk.bold("REFLECT --full"));
+      const maxWidth = Math.min(getOutputStyle().width, 84);
+      console.log(chalk.dim(formatRule("─", { maxWidth })));
+      console.log(chalk.dim("Running full periodic pipeline: transcripts → reflection → cleanup"));
+      if (options.dryRun) console.log(chalk.dim("Mode: dry-run (no changes will be written)"));
+      console.log("");
+    }
+
+    const result = await runPeriodicJob(config, {
+      dryRun: options.dryRun,
+      verbose: !options.json,
+    });
+
+    if (result.skippedReason) {
+      if (options.json) {
+        printJsonResult(command, { skipped: true, reason: result.skippedReason }, { startedAtMs });
+      } else {
+        console.log(chalk.yellow(`Skipped: ${result.skippedReason}`));
+      }
+      return;
+    }
+
+    if (options.json) {
+      printJsonResult(command, {
+        full: true,
+        success: result.success,
+        transcriptsProcessed: result.transcriptsProcessed,
+        reflectionResult: result.reflectionResult ? {
+          sessionsProcessed: result.reflectionResult.sessionsProcessed,
+          deltasGenerated: result.reflectionResult.deltasGenerated,
+        } : null,
+        cleanupItems: result.cleanupItems,
+        errors: result.errors,
+      }, { startedAtMs });
+    } else {
+      const maxWidth = Math.min(getOutputStyle().width, 84);
+      if (result.success) {
+        console.log(chalk.green(`\n${iconPrefix("check")}Full pipeline complete.`));
+      } else {
+        console.log(chalk.yellow(`\n${iconPrefix("warning")}Pipeline completed with errors.`));
+      }
+      console.log(
+        formatKv([
+          { key: "Transcripts processed", value: String(result.transcriptsProcessed) },
+          ...(result.reflectionResult ? [
+            { key: "Sessions reflected", value: String(result.reflectionResult.sessionsProcessed) },
+            { key: "Deltas generated", value: String(result.reflectionResult.deltasGenerated) },
+          ] : []),
+          { key: "Cleanup items queued", value: String(result.cleanupItems) },
+        ], { indent: "  ", width: maxWidth })
+      );
+      if (result.errors.length > 0) {
+        console.log(chalk.yellow(`\nErrors (${result.errors.length}):`));
+        result.errors.slice(0, 5).forEach(e => console.log(chalk.yellow(`  - ${e}`)));
+        if (result.errors.length > 5) console.log(chalk.yellow(`  ... and ${result.errors.length - 5} more`));
+      }
+    }
+
+    const statsAfter = await getUsageStats(config);
+    const operationCost = statsAfter.today - statsBefore.today;
+    if (operationCost > 0 && !options.json) {
+      console.log(chalk.dim(formatCostSummary(operationCost, statsAfter)));
+    }
+    return;
+  }
 
   const daysCheck = validatePositiveInt(options.days, "days", { min: 1, allowUndefined: true });
   if (!daysCheck.ok) {

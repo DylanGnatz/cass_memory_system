@@ -811,7 +811,9 @@ Session notes are captured through two mechanisms that work together:
 
 **1. MCP tool (high quality, agent-generated):** When the MCP server is configured, Claude Code can call `cm_snapshot` with a structured summary.
 
-**Setup:** Add a `.mcp.json` to your project root (or `~/.claude/.mcp.json` for global access):
+**Setup — global (recommended, works across all projects):**
+
+1. Add MCP server to `~/.claude/.mcp.json`:
 
 ```json
 {
@@ -823,31 +825,82 @@ Session notes are captured through two mechanisms that work together:
 }
 ```
 
-Then add this to your project's `CLAUDE.md`:
+2. Add session note instruction to `~/.claude/CLAUDE.md`:
 
 ```markdown
-## Memory System — MANDATORY
+# STOP — Read This First
 
-IMPORTANT: You MUST call the `cm_snapshot` MCP tool at these points:
-1. When you notice your context is getting large (before compaction happens)
-2. At the end of any major task, feature, or debugging session
-3. Before making a commit or opening a PR
-4. If the user says they're done or wrapping up
+## Session Notes — MANDATORY, NON-NEGOTIABLE
 
-This is how session knowledge is preserved across context boundaries. If you skip this,
-the work done in this session will be lost.
+You MUST call `cm_snapshot` **repeatedly throughout the conversation**, not just at the end.
+If context compacts before you snapshot, everything learned in this session is **permanently lost**.
 
-When calling `cm_snapshot`, provide ALL of these fields:
-- `abstract`: 1-2 sentence summary of what was accomplished this session
-- `topics`: array of topic slugs in kebab-case (e.g. ["auth-setup", "billing-api"])
-- `content`: markdown body capturing the essential knowledge from this session:
-  - What was built or changed (with specific file paths)
+### When to call `cm_snapshot`
+
+Call it at **ALL** of these points — not just the last one:
+
+1. **After completing each significant subtask** (e.g., finished writing a module, finished tests, finished a refactor). Do NOT batch — snapshot after each one.
+2. **Before any commit or PR.**
+3. **When the conversation is getting long.** If you've been working for a while without a snapshot, you are overdue. Err on the side of snapshotting too often.
+4. **When the user says they're done or wrapping up.**
+
+**Rule of thumb: if you've done enough work that losing it would hurt, snapshot NOW.**
+
+A session with 5 snapshots is better than a session with 1. Each snapshot is cheap. Lost knowledge is expensive.
+
+### What to include
+
+Provide ALL three fields every time:
+
+- **`abstract`**: 1-2 sentence summary of what was accomplished since the last snapshot
+- **`topics`**: array of topic slugs in kebab-case (e.g. `["auth-setup", "billing-api"]`)
+- **`content`**: markdown body with:
+  - What was built or changed (specific file paths)
   - Key decisions made and why
   - Problems encountered and how they were resolved
+  - Gotchas, surprises, non-obvious behavior (e.g. "bun:sqlite supports FTS5 natively", "JSON.stringify(zodSchema) doesn't produce readable field names"). These save hours in future sessions.
   - Any unfinished work or open questions
+
+### After every snapshot
+
+**Always tell the user you took a snapshot.** Use a short message like:
+
+> Snapshot saved: [1-sentence abstract]
+
+This keeps the user aware of what's being captured and lets them correct or add context if needed. Never snapshot silently.
+
+### Common failure modes — do NOT do these
+
+- Saving a single snapshot at the very end of a long session (too late if context compacted)
+- Putting `cm_snapshot` as the last item on a todo list (deprioritizes it)
+- Waiting until the user asks (they shouldn't have to)
+- Skipping it because "the work isn't done yet" (partial progress is still valuable)
+- Calling `cm_snapshot` without telling the user (they should always know what was captured)
 
 Do NOT wait to be asked. Do NOT skip this step. This is as important as committing code.
 ```
+
+3. (Optional) Add the `/snapshot` slash command to `~/.claude/commands/snapshot.md` for manual triggering:
+
+```markdown
+Call the `cm_snapshot` MCP tool to preserve this session's knowledge.
+
+If arguments are provided, use them as guidance for what to capture: $ARGUMENTS
+
+Provide ALL of these fields:
+- `abstract`: 1-2 sentence summary of what was accomplished
+- `topics`: array of topic slugs in kebab-case covering what was worked on
+- `content`: markdown body with:
+  - What was built or changed (with specific file paths)
+  - Key decisions made and why
+  - Problems encountered and how they were resolved
+  - Things learned — gotchas, surprises, non-obvious behavior
+  - Any unfinished work or open questions
+
+Draw from the full conversation context to write a thorough, accurate snapshot.
+```
+
+Both the MCP server and CLAUDE.md instruction can also be set per-project (`.mcp.json` and `CLAUDE.md` in the project root), but global setup ensures capture works everywhere.
 
 **2. PreCompact hook (LLM safety net):** If the MCP call didn't happen, this hook summarizes the transcript via the API before compaction. Requires an API key (set `ANTHROPIC_API_KEY`). Add to `~/.claude/settings.json`:
 

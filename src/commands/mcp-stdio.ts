@@ -9,6 +9,8 @@
 
 import { createInterface } from "node:readline";
 import { __test } from "./serve.js";
+import { maybeRunPeriodicJobBackground } from "../periodic-job.js";
+import { loadConfig } from "../config.js";
 
 const { routeRequest } = __test;
 
@@ -109,4 +111,11 @@ export async function mcpStdioCommand(): Promise<void> {
   });
 
   process.stderr.write("[mcp-stdio] MCP stdio server ready\n");
+
+  // Fire-and-forget: check if periodic job is overdue, run in background
+  loadConfig().then(config => {
+    maybeRunPeriodicJobBackground(config);
+  }).catch(() => {
+    // Config load failed — skip periodic job
+  });
 }

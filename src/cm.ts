@@ -23,6 +23,7 @@ import { undoCommand } from "./commands/undo.js";
 import { privacyCommand } from "./commands/privacy.js";
 import { similarCommand } from "./commands/similar.js";
 import { onboardCommand } from "./commands/onboard.js";
+import { topicCommand } from "./commands/topic.js";
 import { infoCommand } from "./info.js";
 import { examplesCommand } from "./examples.js";
 
@@ -491,6 +492,31 @@ program.command("mcp-stdio")
     await mcpStdioCommand();
   });
 
+// --- Topic ---
+const topic = program.command("topic")
+  .description("Manage knowledge topics");
+
+topic.command("add")
+  .description("Add a new topic")
+  .argument("<slug>", "Topic slug (kebab-case)")
+  .option("--name <name>", "Display name (defaults to slug)")
+  .option("--description <text>", "Topic description")
+  .option("--source <source>", "Topic source: user or system", "user")
+  .option("-j, --json", "Output JSON")
+  .action(async (slug: string, opts: any) => await topicCommand("add", [slug], opts));
+
+topic.command("list")
+  .description("List all topics with metadata")
+  .option("-j, --json", "Output JSON")
+  .action(async (opts: any) => await topicCommand("list", [], opts));
+
+topic.command("remove")
+  .description("Remove a topic from tracking")
+  .argument("<slug>", "Topic slug")
+  .option("--force", "Force removal of user-created topics")
+  .option("-j, --json", "Output JSON")
+  .action(async (slug: string, opts: any) => await topicCommand("remove", [slug], opts));
+
 // --- Reflect ---
 program.command("reflect")
   .alias("ref")
@@ -501,11 +527,13 @@ program.command("reflect")
   .option("--workspace <path>", "Filter by workspace")
   .option("-j, --json", "Output JSON")
   .option("--session <path>", "Process specific session file")
+  .option("--full", "Run the full periodic pipeline (transcripts + reflection + cleanup)")
   .addHelpText("after", () =>
     formatCommandExamples([
       "reflect --days 7 --json",
       "reflect --session /path/to/session.jsonl --json",
       "reflect --dry-run --json",
+      "reflect --full",
     ])
   )
   .action(async (opts: any) => await reflectCommand(opts));

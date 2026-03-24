@@ -422,7 +422,7 @@ export const ConfigSchema = z.object({
   topicsJsonPath: z.string().default("~/.memory-system/topics.json"),
 
   // Memory system tuning
-  periodicJobIntervalHours: z.number().default(4),
+  periodicJobIntervalHours: z.number().default(24),
   knowledgePageBloatThreshold: z.number().default(5000),
   staleTopicIgnoreDays: z.number().default(30),
   transcriptRetentionDays: z.number().default(30),
@@ -491,6 +491,124 @@ export interface CassTimelineResult {
 }
 
 // ============================================================================
+// PHASE 4 — CONTEXT RETRIEVAL + TOPIC SYSTEM
+// ============================================================================
+
+// --- Knowledge Search Hit (replaces CassSearchHit in context results) ---
+
+export const KnowledgeSearchHitSchema = z.object({
+  type: z.enum(["knowledge", "session_note", "digest", "transcript", "playbook"]),
+  id: z.string(),
+  snippet: z.string(),
+  score: z.number(),
+  title: z.string().optional(),
+});
+export type KnowledgeSearchHit = z.infer<typeof KnowledgeSearchHitSchema>;
+
+// --- Topic Excerpts for cm_context ---
+
+export const TopicExcerptSchema = z.object({
+  topic: z.string(),
+  slug: z.string(),
+  sections: z.array(z.object({
+    title: z.string(),
+    preview: z.string(),
+  })),
+});
+export type TopicExcerpt = z.infer<typeof TopicExcerptSchema>;
+
+// --- Recent/Unprocessed Session for cm_context ---
+
+export const RecentSessionSchema = z.object({
+  id: z.string(),
+  date: z.string(),
+  abstract: z.string(),
+  note_text: z.string(),
+});
+export type RecentSession = z.infer<typeof RecentSessionSchema>;
+
+// --- Related Topic for cm_context ---
+
+export const RelatedTopicSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+  description: z.string(),
+  similarity: z.number(),
+});
+export type RelatedTopic = z.infer<typeof RelatedTopicSchema>;
+
+// --- Review Queue (Phase 4 writes, Phase 5 reads+updates) ---
+
+export const ColdStartSuggestionSourceSchema = z.object({
+  type: z.enum(["knowledge_section", "session_note"]),
+  topic: z.string().optional(),
+  section: z.string().optional(),
+  snippet: z.string(),
+  similarity: z.number(),
+});
+export type ColdStartSuggestionSource = z.infer<typeof ColdStartSuggestionSourceSchema>;
+
+export const ReviewQueueStatusEnum = z.enum(["pending", "approved", "dismissed"]);
+export type ReviewQueueStatus = z.infer<typeof ReviewQueueStatusEnum>;
+
+export const ColdStartSuggestionItemSchema = z.object({
+  id: z.string(),
+  type: z.literal("cold_start_suggestion"),
+  status: ReviewQueueStatusEnum.default("pending"),
+  created: z.string(),
+  target_topic: z.string(),
+  source: ColdStartSuggestionSourceSchema,
+});
+
+export const BloatedPageItemSchema = z.object({
+  id: z.string(),
+  type: z.literal("bloated_page"),
+  status: ReviewQueueStatusEnum.default("pending"),
+  created: z.string(),
+  target_topic: z.string(),
+  data: z.object({
+    word_count: z.number(),
+    section_count: z.number(),
+  }),
+});
+
+export const StaleTopicItemSchema = z.object({
+  id: z.string(),
+  type: z.literal("stale_topic"),
+  status: ReviewQueueStatusEnum.default("pending"),
+  created: z.string(),
+  target_topic: z.string(),
+  data: z.object({
+    days_ignored: z.number(),
+  }),
+});
+
+export const UserFlagItemSchema = z.object({
+  id: z.string(),
+  type: z.literal("user_flag"),
+  status: ReviewQueueStatusEnum.default("pending"),
+  created: z.string(),
+  target_topic: z.string().default(""),
+  target_path: z.string(),
+  target_section: z.string().optional(),
+  reason: z.string().optional(),
+});
+
+export const ReviewQueueItemSchema = z.discriminatedUnion("type", [
+  ColdStartSuggestionItemSchema,
+  BloatedPageItemSchema,
+  StaleTopicItemSchema,
+  UserFlagItemSchema,
+]);
+export type ReviewQueueItem = z.infer<typeof ReviewQueueItemSchema>;
+
+export const ReviewQueueSchema = z.object({
+  schema_version: z.literal(1),
+  items: z.array(ReviewQueueItemSchema).default([]),
+});
+export type ReviewQueue = z.infer<typeof ReviewQueueSchema>;
+
+// ============================================================================
 // CONTEXT OUTPUT
 // ============================================================================
 
@@ -525,7 +643,7 @@ export const ContextResultSchema = z.object({
   task: z.string(),
   relevantBullets: z.array(ScoredBulletSchema),
   antiPatterns: z.array(ScoredBulletSchema),
-  historySnippets: z.array(CassSearchHitSchema),
+  searchResults: z.array(KnowledgeSearchHitSchema).default([]),
   deprecatedWarnings: z.array(z.string()),
   suggestedCassQueries: z.array(z.string()),
   degraded: DegradedSummarySchema.optional(),
@@ -534,7 +652,13 @@ export const ContextResultSchema = z.object({
     pattern: z.string(),
     reason: z.string(),
     reference: z.string()
-  }).optional()
+  }).optional(),
+  // Phase 4 extensions (all optional for backwards compatibility)
+  topicExcerpts: z.array(TopicExcerptSchema).optional(),
+  recentSessions: z.array(RecentSessionSchema).optional(),
+  relatedTopics: z.array(RelatedTopicSchema).optional(),
+  suggestedDeepDives: z.array(z.string()).optional(),
+  lastReflectionRun: z.string().optional(),
 });
 export type ContextResult = z.infer<typeof ContextResultSchema>;
 
@@ -1027,6 +1151,91 @@ export const KnowledgeDeltaSchema = z.discriminatedUnion("type", [
 ]);
 export type KnowledgeDelta = z.infer<typeof KnowledgeDeltaSchema>;
 
+// --- Reflector Output Schemas (Phase 3 — Two-Call Split) ---
+
+// Call 1 output: structural/extractive — bullets + topic suggestions
+export const ReflectorCall1OutputSchema = z.object({
+  bullets: z.array(z.object({
+    content: z.string().min(1),
+    scope: BulletScopeEnum,
+    category: z.string(),
+    type: BulletTypeEnum,
+    kind: BulletKindEnum,
+    reasoning: z.string(), // why this bullet is worth extracting
+  })),
+  topic_suggestions: z.array(z.object({
+    slug: z.string().min(1),
+    name: z.string().min(1),
+    description: z.string(),
+    reasoning: z.string(), // why this topic should exist
+  })),
+});
+export type ReflectorCall1Output = z.infer<typeof ReflectorCall1OutputSchema>;
+
+// Call 2 output: generative/narrative — knowledge page prose + digest
+export const ReflectorCall2OutputSchema = z.object({
+  knowledge_sections: z.array(z.object({
+    topic_slug: z.string().min(1),
+    section_title: z.string().min(1),
+    content: z.string().min(1), // prose paragraph(s)
+    confidence: ConfidenceTierEnum,
+    related_bullet_indices: z.array(z.number().int().nonnegative()).default([]), // indices into Call 1 bullets
+  })),
+  digest_content: z.string(), // chronological narrative summary for the day
+});
+export type ReflectorCall2Output = z.infer<typeof ReflectorCall2OutputSchema>;
+
+// Diary-from-note LLM output (structured scaffold for Reflector)
+export const DiaryFromNoteOutputSchema = z.object({
+  status: SessionStatusEnum,
+  accomplishments: z.array(z.string()).default([]),
+  decisions: z.array(z.string()).default([]),
+  challenges: z.array(z.string()).default([]),
+  preferences: z.array(z.string()).default([]),
+  keyLearnings: z.array(z.string()).default([]),
+  tags: z.array(z.string()).default([]),
+});
+export type DiaryFromNoteOutput = z.infer<typeof DiaryFromNoteOutputSchema>;
+
+// Quality telemetry for Reflector drift detection
+export const ReflectorQualityTelemetrySchema = z.object({
+  sessionId: z.string(),
+  timestamp: z.string(), // ISO 8601
+  call1BulletsProposed: z.number().int().nonnegative(),
+  call1TopicSuggestionsProposed: z.number().int().nonnegative(),
+  call2SectionsProposed: z.number().int().nonnegative(),
+  curatorAccepted: z.number().int().nonnegative(),
+  curatorRejected: z.number().int().nonnegative(),
+  driftFlags: z.array(z.object({
+    newSectionId: z.string(),
+    existingSectionId: z.string(),
+    similarity: z.number(),
+    topic: z.string(),
+  })).default([]),
+});
+export type ReflectorQualityTelemetry = z.infer<typeof ReflectorQualityTelemetrySchema>;
+
+// --- Knowledge Page Section (parsed from HTML comments in .md files) ---
+
+export const KnowledgePageSectionSchema = z.object({
+  id: z.string().min(1), // sec-{hash}
+  title: z.string(),
+  content: z.string(),
+  confidence: ConfidenceTierEnum,
+  source: z.string(), // session ID
+  added: z.string(), // ISO date
+  related_bullets: z.array(z.string()).default([]),
+});
+export type KnowledgePageSection = z.infer<typeof KnowledgePageSectionSchema>;
+
+// Full parsed knowledge page (frontmatter + sections)
+export const ParsedKnowledgePageSchema = z.object({
+  frontmatter: KnowledgePageSchema,
+  sections: z.array(KnowledgePageSectionSchema),
+  raw: z.string(), // original file content for roundtrip
+});
+export type ParsedKnowledgePage = z.infer<typeof ParsedKnowledgePageSchema>;
+
 // --- Processing State (state.json) ---
 
 export const SessionProcessingStateSchema = z.object({
@@ -1039,6 +1248,7 @@ export const ProcessingStateSchema = z.object({
   sessions: z.record(z.string(), SessionProcessingStateSchema).default({}),
   lastReflectionRun: z.string().optional(),
   lastIndexUpdate: z.string().optional(),
+  lastPeriodicJobRun: z.string().optional(),
 });
 export type ProcessingState = z.infer<typeof ProcessingStateSchema>;
 
@@ -1071,4 +1281,18 @@ export const Schemas = {
   TopicSuggestion: TopicSuggestionSchema,
   KnowledgeDelta: KnowledgeDeltaSchema,
   ProcessingState: ProcessingStateSchema,
+  // Reflector pipeline (Phase 3)
+  ReflectorCall1Output: ReflectorCall1OutputSchema,
+  ReflectorCall2Output: ReflectorCall2OutputSchema,
+  DiaryFromNoteOutput: DiaryFromNoteOutputSchema,
+  ReflectorQualityTelemetry: ReflectorQualityTelemetrySchema,
+  KnowledgePageSection: KnowledgePageSectionSchema,
+  ParsedKnowledgePage: ParsedKnowledgePageSchema,
+  // Context retrieval + topic system (Phase 4)
+  KnowledgeSearchHit: KnowledgeSearchHitSchema,
+  TopicExcerpt: TopicExcerptSchema,
+  RecentSession: RecentSessionSchema,
+  RelatedTopic: RelatedTopicSchema,
+  ReviewQueueItem: ReviewQueueItemSchema,
+  ReviewQueue: ReviewQueueSchema,
 } as const;

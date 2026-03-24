@@ -86,28 +86,6 @@ bun run src/cm.ts doctor    # Health checks
 - `src/commands/serve.ts` — MCP server tools and resources.
 - `src/cm.ts` — CLI entry point. Update when adding/removing commands.
 
-## Memory System — MANDATORY
-
-IMPORTANT: You MUST call the `cm_snapshot` MCP tool at these points:
-1. When you notice your context is getting large (before compaction happens)
-2. At the end of any major task, feature, or debugging session
-3. Before making a commit or opening a PR
-4. If the user says they're done or wrapping up
-
-This is how session knowledge is preserved across context boundaries. If you skip this,
-the work done in this session will be lost.
-
-When calling `cm_snapshot`, provide ALL of these fields:
-- `abstract`: 1-2 sentence summary of what was accomplished this session
-- `topics`: array of topic slugs in kebab-case (e.g. ["auth-setup", "billing-api"])
-- `content`: markdown body capturing the essential knowledge from this session:
-  - What was built or changed (with specific file paths)
-  - Key decisions made and why
-  - Problems encountered and how they were resolved
-  - Any unfinished work or open questions
-
-Do NOT wait to be asked. Do NOT skip this step. This is as important as committing code.
-
 ## Rules for the Agent
 
 ### CASS Codebase Knowledge
@@ -124,6 +102,14 @@ When asked to begin or continue a build phase, first:
 2. Read the relevant section of [fork_dev_plans/v1_prototype_architecture.md](fork_dev_plans/v1_prototype_architecture.md)
 3. Read [fork_dev_plans/cass_codebase_reference.md](fork_dev_plans/cass_codebase_reference.md) for known facts about files you'll touch
 4. Briefly state your plan for the phase — what you'll do, in what order — and get confirmation before writing code
+
+### UI Code — Use /frontend-design Skill
+**All UI code must go through the `/frontend-design` skill.** Never generate React components, CSS/styling, layout code, or make visual design decisions directly. When building any UI:
+1. Invoke `/frontend-design` with the task description
+2. Feed it the phase 5 build plan ([fork_dev_plans/phase5_build_plan.md](fork_dev_plans/phase5_build_plan.md)) as context
+3. Let the skill handle all frontend code generation
+
+Backend/infrastructure code (Electron main process, IPC handlers, file readers, CLI bridge, preload scripts, parsers) can be written directly.
 
 ### Ask Before Deciding
 When you encounter a decision not covered by the architecture plan — **ask the user**. Do not make assumptions about:

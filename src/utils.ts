@@ -3024,11 +3024,11 @@ export function formatContextMarkdown(result: ContextResult): string {
   }
 
   // Historical Context
-  if (result.historySnippets.length > 0) {
-    lines.push(`## HISTORICAL CONTEXT (${result.historySnippets.length} sessions)`);
+  if (result.searchResults.length > 0) {
+    lines.push(`## HISTORICAL CONTEXT (${result.searchResults.length} sessions)`);
     lines.push("");
     // Show up to 5 history items
-    const displayed = result.historySnippets.slice(0, 5);
+    const displayed = result.searchResults.slice(0, 5);
     displayed.forEach((hit, idx) => {
       const agent = hit.agent || "unknown";
       const relTime = hit.timestamp ? formatRelativeTime(hit.timestamp) : "";
