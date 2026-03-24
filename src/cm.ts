@@ -459,6 +459,30 @@ program.command("doctor")
     })
   );
 
+// --- Snapshot ---
+program.command("snapshot")
+  .description("Generate or update session notes from transcripts")
+  .option("--session <path>", "Process a specific transcript file or session ID")
+  .option("--abstract <text>", "Agent-provided summary (skips LLM call when used with --content)")
+  .option("--topics <list>", "Comma-separated topic slugs (e.g. 'billing-service,auth')")
+  .option("--content <text>", "Agent-provided note body in markdown (skips LLM call when used with --abstract)")
+  .option("--max-sessions <n>", "Max transcripts to process (default 10)", toInt)
+  .option("--raw", "Extract metadata from transcript without LLM (no API key needed)")
+  .option("-j, --json", "Output JSON")
+  .addHelpText("after", () =>
+    formatCommandExamples([
+      "snapshot",
+      "snapshot --session /path/to/session.jsonl",
+      'snapshot --abstract "Fixed auth bug" --topics "auth,billing" --content "## Notes\\n..."',
+      "snapshot --max-sessions 5 --json",
+      "snapshot --raw --json   # no API key needed",
+    ])
+  )
+  .action(async (opts: any) => {
+    const { snapshotCommand } = await import("./commands/snapshot.js");
+    await snapshotCommand(opts);
+  });
+
 // --- Reflect ---
 program.command("reflect")
   .alias("ref")

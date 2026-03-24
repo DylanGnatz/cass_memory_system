@@ -805,9 +805,73 @@ cm init --starter typescript  # or: react, python, go
 cm starters  # list available starters
 ```
 
+### Session Note Capture (Claude Code)
+
+Session notes are captured through two mechanisms that work together:
+
+**1. MCP tool (high quality, agent-generated):** When the MCP server is configured, Claude Code can call `cm_snapshot` with a structured summary. Add this to your project's `CLAUDE.md`:
+
+```markdown
+## Memory System — MANDATORY
+
+IMPORTANT: You MUST call the `cm_snapshot` MCP tool at these points:
+1. When you notice your context is getting large (before compaction happens)
+2. At the end of any major task, feature, or debugging session
+3. Before making a commit or opening a PR
+4. If the user says they're done or wrapping up
+
+This is how session knowledge is preserved across context boundaries. If you skip this,
+the work done in this session will be lost.
+
+When calling `cm_snapshot`, provide ALL of these fields:
+- `abstract`: 1-2 sentence summary of what was accomplished this session
+- `topics`: array of topic slugs in kebab-case (e.g. ["auth-setup", "billing-api"])
+- `content`: markdown body capturing the essential knowledge from this session:
+  - What was built or changed (with specific file paths)
+  - Key decisions made and why
+  - Problems encountered and how they were resolved
+  - Any unfinished work or open questions
+
+Do NOT wait to be asked. Do NOT skip this step. This is as important as committing code.
+```
+
+**2. PreCompact hook (LLM safety net):** If the MCP call didn't happen, this hook summarizes the transcript via the API before compaction. Requires an API key (set `ANTHROPIC_API_KEY`). Add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/cass_memory_system/scripts/pre-compact-snapshot.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Replace `/path/to/cass_memory_system` with the actual path to your clone.
+
+**How they avoid duplication:** Both paths update the same byte offset in `state.json`. If the MCP call already captured the transcript up to byte X, the hook finds no new content and exits as a no-op. If the MCP call didn't happen, the hook uses the LLM to summarize the transcript.
+
+You can also trigger a snapshot manually:
+
+```bash
+# With agent-provided content (no API key needed)
+bun run src/cm.ts snapshot --abstract "What this session covered" --content "Detailed notes..." --json
+
+# With LLM summarization (requires API key)
+bun run src/cm.ts snapshot --json
+```
+
 ### Automating Reflection
 
-The key to the system is automated reflection. Set up a cron job or hook:
+Set up a cron job to periodically reflect on captured session notes:
 
 ```bash
 # Daily reflection on recent sessions
@@ -815,13 +879,6 @@ cm reflect --days 7 --json
 
 # Via cron (runs at 2am daily)
 0 2 * * * /usr/local/bin/cm reflect --days 7 >> ~/.memory-system/reflect.log 2>&1
-```
-
-For Claude Code users, add a post-session hook in `.claude/hooks.json`:
-```json
-{
-  "post-session": ["cm reflect --days 1"]
-}
 ```
 
 ---

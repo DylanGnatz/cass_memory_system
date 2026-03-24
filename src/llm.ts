@@ -338,6 +338,78 @@ Respond with:
   ],
   "summary": string
 }`,
+
+  sessionNoteCreate: `You are a session note generator for a coding knowledge management system. Your job is to compress a raw coding session transcript into a concise, information-dense session note.
+
+Write for someone who needs to pick up this work tomorrow. Include the specific details they'd need — paths, configs, error messages, ticket numbers — not the process of how you found them.
+
+<transcript>
+{transcript}
+</transcript>
+
+INCLUSION CRITERIA (what survives compression):
+- Specific facts: file paths, config values, API endpoints, error messages, version numbers
+- Decisions and their reasoning: why option A was chosen over B
+- Discovered behaviors: "X actually works like Y, not like the docs say"
+- Commands that worked (or didn't) and why
+- People mentioned and their roles/opinions
+- Links, ticket numbers, PR numbers, channel names
+- Unresolved questions and open threads
+- Dead ends that taught something ("initially suspected retry logic, was actually HMAC key mismatch")
+
+EXCLUSION CRITERIA (what gets dropped):
+- Verbose back-and-forth debugging that led nowhere
+- Repeated attempts at the same fix
+- Boilerplate code generation that worked first try
+- Standard tool invocations with expected results
+- Meta-conversation about approach
+- The code itself (capture WHAT was built and WHY, not the implementation listing)
+
+FORMAT:
+- Use ## date headers (e.g. ## March 20, 2026)
+- Use ### time/topic headers (e.g. ### 09:15 - Initial investigation)
+- When the session touches multiple topics, insert topic transition headers: ### [Topic shift: Topic Name]
+- Be SPECIFIC and ACTIONABLE. Avoid generic statements like "wrote code" or "fixed bug". Include specific file names, function names, error messages.
+
+Respond with JSON:
+{
+  "abstract": "1-2 sentence summary of the full session",
+  "topics_touched": ["topic-slug-1", "topic-slug-2"],
+  "content": "The markdown body of the session note"
+}`,
+
+  sessionNoteAppend: `You are extending an existing session note with new transcript content. The session has continued and there is new content to add.
+
+<existing_note>
+{existingNote}
+</existing_note>
+
+<existing_abstract>
+{existingAbstract}
+</existing_abstract>
+
+<new_transcript>
+{newTranscript}
+</new_transcript>
+
+RULES:
+- Append ONLY what is genuinely new. Do NOT repeat what is already in the existing note.
+- Reference earlier findings where relevant ("as identified earlier, the HMAC key was the root cause").
+- Start with a brief context resumption sentence ("Continuing investigation into billing webhook failures.").
+- If the new content is from a different day than the last entry in the existing note, add a new ## date header.
+- If the session shifts to a new topic, use ### [Topic shift: Topic Name].
+- Detect if new content contradicts something in the existing note. If the transcript itself contains an explicit self-correction ("actually, I was wrong earlier"), capture the correction. Otherwise, just add the new information as new sections — the Validator will catch contradictions later.
+- Update the abstract to cover the FULL note (existing + new content).
+- Update topics_touched to include any new topics.
+
+INCLUSION/EXCLUSION CRITERIA: Same as initial note generation — include specific facts, decisions, outcomes, references. Omit debugging noise, boilerplate, meta-conversation.
+
+Respond with JSON:
+{
+  "abstract": "Updated 1-2 sentence summary covering the FULL note",
+  "topics_touched": ["all-topic-slugs", "including-new-ones"],
+  "new_content": "ONLY the new section(s) to append"
+}`,
 } as const;
 
 export function fillPrompt(
@@ -750,6 +822,53 @@ Make queries specific enough to be useful but broad enough to match variations.`
     );
     return result.queries;
   }, "generateSearchQueries");
+}
+
+// --- Session Note Generation ---
+
+import {
+  SessionNoteCreateOutputSchema,
+  SessionNoteAppendOutputSchema,
+  type SessionNoteCreateOutput,
+  type SessionNoteAppendOutput,
+} from "./session-notes.js";
+
+export async function generateSessionNoteContent(
+  transcript: string,
+  transcriptPath: string,
+  config: Config,
+  io: LLMIO = DEFAULT_LLM_IO
+): Promise<SessionNoteCreateOutput> {
+  const safeTranscript = truncateForContext(transcript, { maxChars: 80000 });
+
+  const prompt = fillPrompt(PROMPTS.sessionNoteCreate, {
+    transcript: safeTranscript,
+  });
+
+  return llmWithRetry(async () => {
+    return generateObjectSafe(SessionNoteCreateOutputSchema, prompt, config, 3, io);
+  }, "generateSessionNoteContent");
+}
+
+export async function extendSessionNoteContent(
+  existingNoteBody: string,
+  newTranscript: string,
+  existingAbstract: string,
+  config: Config,
+  io: LLMIO = DEFAULT_LLM_IO
+): Promise<SessionNoteAppendOutput> {
+  const safeExisting = truncateForContext(existingNoteBody, { maxChars: 30000 });
+  const safeNewTranscript = truncateForContext(newTranscript, { maxChars: 50000 });
+
+  const prompt = fillPrompt(PROMPTS.sessionNoteAppend, {
+    existingNote: safeExisting,
+    existingAbstract,
+    newTranscript: safeNewTranscript,
+  });
+
+  return llmWithRetry(async () => {
+    return generateObjectSafe(SessionNoteAppendOutputSchema, prompt, config, 3, io);
+  }, "extendSessionNoteContent");
 }
 
 // --- Multi-Provider Fallback ---

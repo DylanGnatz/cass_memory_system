@@ -116,6 +116,20 @@ const TOOL_DEFS = [
     }
   },
   {
+    name: "cm_snapshot",
+    description: "IMPORTANT: Call this proactively before context compaction or at the end of major tasks to preserve session knowledge. Provide abstract, topics, and content — you ARE the LLM generating the note, so no API key is needed. Include specific facts, decisions, file paths, error messages, and outcomes. Do NOT wait to be asked — capture knowledge as you go.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session: { type: "string", description: "Transcript file path or session ID. If omitted, processes all modified transcripts." },
+        abstract: { type: "string", description: "1-2 sentence summary of the session. When provided with content, skips the LLM call." },
+        topics: { type: "array", items: { type: "string" }, description: "Topic slugs covered (kebab-case, e.g. 'billing-service')" },
+        content: { type: "string", description: "Session note body in markdown. Include specific facts, decisions, outcomes, error messages, file paths. Use ## date headers and ### topic headers." },
+        maxSessions: { type: "integer", minimum: 1, maximum: 50, description: "Max transcripts to process when no session specified (default 10)", default: 10 }
+      }
+    }
+  },
+  {
     name: "memory_reflect",
     description: "Trigger reflection on recent sessions to extract insights",
     inputSchema: {
@@ -380,6 +394,70 @@ async function handleToolCall(name: string, args: any): Promise<any> {
       }
 
       return result;
+    }
+    case "cm_snapshot": {
+      const t0 = performance.now();
+      const config = await loadConfig();
+      const sessionArg = args?.session as string | undefined;
+      const maxSessions = (args?.maxSessions as number) ?? 10;
+
+      // Agent-provided content: when the agent passes abstract + content,
+      // we skip the LLM call entirely. The agent IS the LLM.
+      const agentContent = (args?.abstract && args?.content)
+        ? {
+            abstract: args.abstract as string,
+            topics_touched: (args.topics as string[]) ?? [],
+            content: args.content as string,
+          }
+        : undefined;
+
+      const { processTranscript, processAllTranscripts, scanForModifiedTranscripts } =
+        await import("../session-notes.js");
+
+      if (sessionArg || agentContent) {
+        // Process a specific transcript (or write agent content to the most recent)
+        const scans = await scanForModifiedTranscripts(config);
+        let match = sessionArg
+          ? scans.find(
+              (s) => s.transcriptPath === sessionArg || s.sessionId === sessionArg || s.transcriptPath.includes(sessionArg)
+            )
+          : scans[0]; // Default to most recent modified transcript when agent provides content
+
+        if (!match) {
+          if (agentContent) {
+            return { message: "No modified transcript found to attach agent content to.", processed: 0 };
+          }
+          return { message: "No modified transcript found matching the given session.", processed: 0 };
+        }
+
+        const note = await processTranscript(match, config, { agentContent });
+        maybeProfile("cm_snapshot", t0);
+        return {
+          processed: 1,
+          sessionId: note.frontmatter.id,
+          abstract: note.frontmatter.abstract,
+          topics: note.frontmatter.topics_touched,
+          agentProvided: !!agentContent,
+          message: agentContent
+            ? `Session note saved for ${note.frontmatter.id} (agent-generated, no LLM call)`
+            : `Session note generated for ${note.frontmatter.id}`,
+        };
+      } else {
+        // Process all modified transcripts (periodic job path — needs API key)
+        const result = await processAllTranscripts(config, { maxSessions });
+        maybeProfile("cm_snapshot", t0);
+        return {
+          processed: result.processed.length,
+          errors: result.errors.length,
+          sessions: result.processed.map((n) => ({
+            id: n.frontmatter.id,
+            abstract: n.frontmatter.abstract,
+          })),
+          message: result.processed.length > 0
+            ? `Generated ${result.processed.length} session note(s)`
+            : "No modified transcripts found",
+        };
+      }
     }
     case "memory_reflect": {
       const t0 = performance.now();

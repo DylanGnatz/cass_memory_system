@@ -18,7 +18,7 @@ Last updated: 2026-03-23 (post-Phase 1)
 - **Line 982:** `handleCliError()` — error handling dispatcher (JSON vs human)
 - **Line 1059:** Main entry point — handles `--info`/`--examples` flags, creates program, parses async
 
-### Commands (24 active after Phase 1 removals)
+### Commands (25 active — 24 from Phase 1 + `snapshot` in Phase 2)
 All follow the pattern:
 ```typescript
 program.command("<name>")
@@ -121,6 +121,62 @@ meta (key, value)  -- schema version tracking
 - Porter stemming + unicode61 tokenizer for all FTS5 tables
 - FTS query: each word wrapped in quotes to prevent syntax errors
 - Dedup on re-index: DELETE existing then INSERT (not upsert for FTS5)
+
+---
+
+## session-notes.ts — Session Note Generation (~700 lines) — NEW (Phase 2)
+
+### Purpose
+Core module for the session note lifecycle: discovering transcripts, reading from byte offsets, generating/extending notes via LLM or agent-provided content, managing processing state, and indexing into SQLite FTS.
+
+### Key Exports
+- **`processTranscript(scan, config, options)`** — main entry point: generates or extends a session note from a TranscriptScanResult
+- **`processAllTranscripts(config, options)`** — batch processing for the periodic job
+- **`scanForModifiedTranscripts(config)`** — discovers transcripts with new content since last offset
+- **`discoverTranscripts()`** — finds `.jsonl` files in `~/.claude/projects/`
+- **`readTranscriptFromOffset(filePath, offset)`** — byte-level offset reading
+- **`formatTranscriptChunk(raw)`** — custom JSONL formatter optimized for session notes (NOT diary.ts formatRawSession)
+- **`loadSessionNote(sessionId, config)` / `writeSessionNote(...)`** — session note file I/O with locking
+- **`parseSessionNote(raw)` / `serializeSessionNote(fm, body)`** — YAML frontmatter parse/serialize
+- **`loadProcessingState(config)` / `saveProcessingState(state, config)`** — state.json CRUD
+- **`sessionIdFromPath(transcriptPath)`** — UUID extraction or hash-based ID generation
+- **`SessionNoteCreateOutputSchema` / `SessionNoteAppendOutputSchema`** — Zod schemas for LLM output
+
+### Content Generation Paths
+`processTranscript()` supports three paths via `GenerateNoteOptions`:
+1. **Agent-provided** (`agentContent` set): Claude Code generates the note during the session via `cm_snapshot` MCP tool. No API cost. Highest quality. Primary path.
+2. **LLM-generated** (default): Reads raw transcript, makes API call via llm.ts (Sonnet). Used by PreCompact hook safety net and periodic job. Requires API key.
+3. **Raw** (`raw: true`): Extracts metadata from transcript without LLM. Last-resort fallback, kept in code but not used in normal flow.
+
+All paths share file writing, state tracking, offset management, and FTS indexing. Offset-based dedup: if agent-provided path already captured up to byte X, the LLM fallback finds no new content and exits as a no-op.
+
+### Custom Transcript Formatter (`formatTranscriptChunk`)
+Replaces upstream `formatRawSession` (diary.ts) for session note generation. Key differences:
+- **Drops** meta entries: queue-operation, file-history-snapshot, progress, session_meta
+- **Summarizes** tool_use as one-liners: `> Read: .../file.ts`, `> Edit: .../file.ts — "old code..."`, `> Bash: description`
+- **Drops** tool_result contents (tool name + args are sufficient context)
+- **Keeps** user text, assistant text, thinking blocks (truncated to 500 chars)
+- **Strips** XML tags (ide_selection, ide_opened_file, system-reminder)
+- Helper functions: `summarizeToolUse()` (handles Read, Write, Edit, Bash, Grep, Glob, TodoWrite, Agent, Skill, ToolSearch + generic fallback), `shortenPath()`, `stripXmlTags()`
+
+### Abstract Extraction (`extractAbstractFromJsonl`)
+Used by the raw fallback path. Reads JSONL in 256KB chunks to handle multi-MB base64 image entries. Scans for `"type":"user"` entries, extracts first substantive text (>15 chars, stripped of XML tags). Checks up to 30 user messages before giving up.
+
+### Dependencies
+Imports from: types.ts, llm.ts (generateSessionNoteContent, extendSessionNoteContent), utils.ts, lock.ts, search.ts (types only). No longer imports from diary.ts.
+
+### Circular Import Note
+session-notes.ts exports Zod schemas that llm.ts imports. llm.ts exports LLM functions that session-notes.ts imports. This works because the schemas are pure Zod objects with no runtime dependency on session-notes functions.
+
+---
+
+## commands/snapshot.ts — Snapshot CLI Command (~130 lines) — NEW (Phase 2)
+
+### Purpose
+CLI command for `cm snapshot`. Wraps `processTranscript`/`processAllTranscripts` with JSON/human output formatting.
+
+### Exports
+- **`snapshotCommand(opts)`** — handles `--session`, `--max-sessions`, `--raw`, `--abstract`, `--topics`, `--content`, `--json` flags
 
 ---
 
@@ -239,7 +295,7 @@ types, playbook, tracking, cass, diary, reflect, validate, llm (type), curate, u
 | `src/lock.ts` | 273 | File-level locking for concurrent write safety |
 | `src/output.ts` | 224 | Terminal output formatting |
 | `src/progress.ts` | 268 | Progress reporting for periodic job |
-| `src/llm.ts` | 835 | Multi-provider LLM abstraction (Vercel AI SDK) |
+| `src/llm.ts` | ~890 | Multi-provider LLM abstraction (Vercel AI SDK). Phase 2: added `sessionNoteCreate`/`sessionNoteAppend` prompts + `generateSessionNoteContent()`/`extendSessionNoteContent()` |
 | `src/cost.ts` | 221 | Budget tracking with daily/monthly limits |
 | `src/playbook.ts` | 702 | Playbook CRUD, YAML load/save/merge |
 | `src/gap-analysis.ts` | 298 | Rule archetype categorization, coverage gaps |
@@ -255,11 +311,11 @@ types, playbook, tracking, cass, diary, reflect, validate, llm (type), curate, u
 | `src/reflect.ts` | 3 | Split into two LLM calls (bullets + prose) |
 | `src/validate.ts` | 3 | Three-source evidence model |
 | `src/curate.ts` | 3 | New KnowledgeDelta type handlers |
-| `src/diary.ts` | 2 | Generate from session notes instead of raw transcripts |
+| `src/diary.ts` | 3 | Generate from session notes instead of raw transcripts |
 | `src/orchestrator.ts` | 3 | New pipeline steps for knowledge pages |
 | `src/outcome.ts` | 3 | Knowledge page section tracking |
 | `src/tracking.ts` | 3 | New event types |
-| `src/commands/serve.ts` | 4 | New MCP tools for knowledge queries |
+| `src/commands/serve.ts` | 4 | New MCP tools for knowledge queries. Phase 2: added `cm_snapshot` tool |
 | `src/commands/context.ts` | 4 | FTS + semantic ranking, topic/knowledge queries |
 
 ---
@@ -294,4 +350,4 @@ All internal imports use `.js` extension (ESM): `import { foo } from "./bar.js"`
 - **Helpers:** `test/helpers/` — `temp.ts` (isolated HOME environments), `factories.ts` (test data builders), `e2e-logger.ts`, `git.ts`
 - **Fixtures:** `test/fixtures/`
 - **Naming:** `.e2e.test.ts` (spawn CLI), `.integration.test.ts` (multi-module), `.test.ts` (unit)
-- **Baseline:** 2331 pass, 46 fail (all in serve-stats.test.ts — pre-existing), 3 skip
+- **Baseline:** 2355 pass, 46 fail (all in serve-stats.test.ts — pre-existing), 3 skip
