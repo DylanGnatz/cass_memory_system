@@ -10,12 +10,13 @@ import { validateDelta } from "./validate.js";
 import { validateKnowledgeDelta, detectContradiction } from "./validate.js";
 import { reportContradiction } from "./review-queue.js";
 import type { LLMIO } from "./llm.js";
+import { generateDailyDigest, projectFromSourcePath } from "./llm.js";
 import { curatePlaybook, curateKnowledge, type KnowledgeCurationResult } from "./curate.js";
 import { expandPath, log, warn, error, now, fileExists, resolveRepoDir, generateBulletId, hashContent, jaccardSimilarity, ensureDir, parseInlineFeedback } from "./utils.js";
 import { withLock } from "./lock.js";
 import { extractRuleIdsFromTranscript, classifySessionOutcome, recordOutcome, applyOutcomeFeedback, type OutcomeInput } from "./outcome.js";
 import { findUnprocessedSessionNotes, markSessionNoteProcessed, loadProcessingState, saveProcessingState, type ParsedSessionNote } from "./session-notes.js";
-import { loadTopics, loadKnowledgePage } from "./knowledge-page.js";
+import { loadTopics, loadKnowledgePage, writeDigest } from "./knowledge-page.js";
 import { openSearchIndex } from "./search.js";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -267,193 +268,10 @@ export async function orchestrateReflection(
 
     let dryRunDeltas: PlaybookDelta[] | undefined;
 
-    if (options.dryRun) {
-      dryRunDeltas = allDeltas;
-      // Don't return — Phase 3 knowledge pipeline still needs to run below
-    } else if (allDeltas.length === 0) {
-      // Even if no deltas were generated, we should still mark sessions as processed
-      // (e.g., empty sessions or sessions with no insights) to avoid infinite loops.
-      if (pendingProcessedEntries.length > 0) {
-        await processedLog.appendBatch(pendingProcessedEntries);
-      }
-      // Don't return — Phase 3 knowledge pipeline still needs to run below
-    }
-
-    // 5. Merge Phase: Lock Playbooks, Reload, Curate, Save
-    // We lock Global first, then Repo (if exists) to prevent deadlocks.
-    let globalResult: CurationResult | undefined;
-    let repoResult: CurationResult | undefined;
-    let autoOutcome: ReflectionOutcome["autoOutcome"] | undefined;
-
-   if (!options.dryRun && allDeltas.length > 0) {
-
-    const performMerge = async () => {
-      // Reload fresh playbooks under lock
-      const globalPlaybook = await loadPlaybook(globalPath);
-      let repoPlaybook: Playbook | null = null;
-      if (hasRepo) {
-        repoPlaybook = await loadPlaybook(repoPath!);
-      }
-      
-      // Create fresh merged context to ensure deduplication uses up-to-date data
-      const freshMerged = mergePlaybooks(globalPlaybook, repoPlaybook);
-
-      // Pre-process deltas to decompose 'merge' operations into atomic add/deprecate actions.
-      // This allows us to route deprecations to their specific playbooks (Repo vs Global)
-      // while adding the new merged rule to the default location (Global).
-      const processedDeltas: PlaybookDelta[] = [];
-      
-      for (const delta of allDeltas) {
-        if (delta.type !== "merge") {
-          processedDeltas.push(delta);
-          continue;
-        }
-
-        const mergedContent = delta.mergedContent;
-        const threshold = typeof config.dedupSimilarityThreshold === "number" ? config.dedupSimilarityThreshold : 0.85;
-
-        // If the merged content already exists (or is very similar), prefer deprecating into it
-        // rather than creating a duplicate replacement that curation might skip.
-        const exactMatch = findFirstHashMatch(freshMerged, mergedContent);
-        if (exactMatch && !isActiveBullet(exactMatch)) {
-          warn(
-            `[orchestrator] Skipping merge delta: merged content matches deprecated/blocked bullet ${exactMatch.id}`
-          );
-          continue;
-        }
-
-        const replacement =
-          exactMatch && isActiveBullet(exactMatch)
-            ? exactMatch
-            : findBestActiveSimilarBullet(freshMerged, mergedContent, threshold);
-
-        if (replacement) {
-          for (const id of delta.bulletIds) {
-            // If one of the merged bullets is already the best replacement, keep it active and only deprecate the others.
-            if (id === replacement.id) continue;
-            processedDeltas.push({
-              type: "deprecate",
-              bulletId: id,
-              reason: `Merged into existing ${replacement.id}`,
-              replacedBy: replacement.id
-            });
-          }
-          continue;
-        }
-
-        const newBulletId = generateBulletId();
-
-        // 1. Create the new merged rule
-        processedDeltas.push({
-          type: "add",
-          bullet: {
-            id: newBulletId, // Pre-assign ID so deprecate deltas can reference it
-            content: mergedContent,
-            category: "merged",
-            tags: []
-          },
-          // Merge deltas don't carry sourceSession, so we use a placeholder
-          sourceSession: "merged-operation",
-          reason: delta.reason || "Merged from existing rules"
-        });
-
-        // 2. Deprecate the old rules
-        for (const id of delta.bulletIds) {
-          processedDeltas.push({
-            type: "deprecate",
-            bulletId: id,
-            reason: `Merged into ${newBulletId}`,
-            replacedBy: newBulletId
-          });
-        }
-      }
-
-      // Partition deltas (Routing Logic)
-      const globalDeltas: PlaybookDelta[] = [];
-      const repoDeltas: PlaybookDelta[] = [];
-
-      for (const delta of processedDeltas) {
-        let routed = false;
-        
-        // Feedback/Replace/Delete: Must target existing ID
-        if ('bulletId' in delta && delta.bulletId) {
-          if (repoPlaybook && findBullet(repoPlaybook, delta.bulletId)) {
-            repoDeltas.push(delta);
-            routed = true;
-          } else if (findBullet(globalPlaybook, delta.bulletId)) {
-            globalDeltas.push(delta);
-            routed = true;
-          }
-        }
-
-        // New rules or orphans default to Global
-        if (!routed) {
-           globalDeltas.push(delta);
-        }
-      }
-
-      // Apply Curation
-      if (globalDeltas.length > 0) {
-        globalResult = curatePlaybook(globalPlaybook, globalDeltas, config, freshMerged);
-        await savePlaybook(globalResult.playbook, globalPath, { updateLastReflection: true });
-      }
-
-      if (repoDeltas.length > 0 && repoPlaybook && repoPath) {
-        repoResult = curatePlaybook(repoPlaybook, repoDeltas, config, freshMerged);
-        await savePlaybook(repoResult.playbook, repoPath, { updateLastReflection: true });
-      }
-    };
-
-    // Execute Merge with Locking
-    await withLock(globalPath, async () => {
-      if (hasRepo && repoPath) {
-        await withLock(repoPath, performMerge);
-      } else {
-        await performMerge();
-      }
-    });
-
-    // Final log save - only mark processed AFTER rules are persisted
-    if (pendingProcessedEntries.length > 0) {
+    // Mark CASS Phase 1 sessions as processed even if no deltas generated
+    if (!options.dryRun && pendingProcessedEntries.length > 0) {
       await processedLog.appendBatch(pendingProcessedEntries);
     }
-
-    // 6. Auto-record rule outcomes (post-merge, best-effort)
-    if (pendingOutcomes.length > 0) {
-      try {
-        const records = [];
-        for (const input of pendingOutcomes) {
-          const record = await recordOutcome(input, config);
-          records.push(record);
-        }
-        const feedbackResult = await applyOutcomeFeedback(records, config);
-        autoOutcome = {
-          outcomesRecorded: records.length,
-          feedbackApplied: feedbackResult.applied,
-          missingRules: feedbackResult.missing,
-          inlineFeedbackDeltas: inlineFeedbackDeltaCount,
-        };
-        log(`Auto-recorded ${records.length} outcome(s): ${feedbackResult.applied} feedback event(s) applied`);
-      } catch (err: any) {
-        const msg = err?.message || String(err);
-        errors.push(`Auto-outcome recording failed: ${msg}`);
-        autoOutcome = {
-          outcomesRecorded: 0,
-          feedbackApplied: 0,
-          missingRules: [],
-          inlineFeedbackDeltas: inlineFeedbackDeltaCount,
-        };
-      }
-    } else if (inlineFeedbackDeltaCount > 0) {
-      autoOutcome = {
-        outcomesRecorded: 0,
-        feedbackApplied: 0,
-        missingRules: [],
-        inlineFeedbackDeltas: inlineFeedbackDeltaCount,
-      };
-    }
-
-    } // end if (!options.dryRun && allDeltas.length > 0)
 
     // ========================================================================
     // PHASE 3: KNOWLEDGE REFLECTION PIPELINE
@@ -463,6 +281,8 @@ export async function orchestrateReflection(
 
     let knowledgeResult: KnowledgeCurationResult | undefined;
     let sessionNotesProcessed = 0;
+    const digestSessions: import("./llm.js").DigestSessionInput[] = [];
+    const knowledgePagesUpdated = new Set<string>();
 
     try {
       const unprocessedNotes = await findUnprocessedSessionNotes(config, options.maxSessions || 5);
@@ -490,6 +310,18 @@ export async function orchestrateReflection(
               note.frontmatter.topics_touched,
               config
             );
+
+            // 1b. Collect session info for daily digest synthesis
+            digestSessions.push({
+              sessionId: noteId,
+              title: note.frontmatter.title || "Untitled session",
+              abstract: note.frontmatter.abstract,
+              project: projectFromSourcePath(note.frontmatter.source_session || ""),
+              topics: note.frontmatter.topics_touched,
+              decisions: diary.decisions.slice(0, 3),
+              challenges: diary.challenges.slice(0, 3),
+              openQuestions: [], // TODO: extract from session note body if needed
+            });
 
             // 2. Load relevant knowledge pages for Call 2 context
             const relevantTopicSlugs = new Set([
@@ -539,6 +371,34 @@ export async function orchestrateReflection(
               }
             }
 
+            // 5b. Inline feedback + auto-outcome from session note body.
+            // Same logic as CASS Phase 1 but using session note text instead of cass export.
+            const noteContent = note.body;
+            if (noteContent) {
+              // Parse inline feedback comments (// [cass: helpful b-xyz] - reason)
+              const inlineFeedback = parseInlineFeedback(noteContent);
+              if (inlineFeedback.length > 0) {
+                for (const fb of inlineFeedback) {
+                  const delta: PlaybookDelta = fb.type === "harmful"
+                    ? { type: "harmful", bulletId: fb.bulletId, sourceSession: noteId, reason: "other", context: fb.reason }
+                    : { type: "helpful", bulletId: fb.bulletId, sourceSession: noteId, context: fb.reason };
+                  allDeltas.push(delta);
+                }
+                inlineFeedbackDeltaCount += inlineFeedback.length;
+              }
+
+              // Extract rule IDs and classify session outcome for auto-recording.
+              const inlineFeedbackIds = new Set(inlineFeedback.map(fb => fb.bulletId.toLowerCase()));
+              const ruleIds = extractRuleIdsFromTranscript(noteContent)
+                .filter(id => !inlineFeedbackIds.has(id));
+              if (ruleIds.length > 0) {
+                const outcomeInput = classifySessionOutcome(noteContent, diary, ruleIds);
+                if (outcomeInput) {
+                  pendingOutcomes.push(outcomeInput);
+                }
+              }
+            }
+
             sessionNotesProcessed++;
           } catch (err: any) {
             errors.push(`Knowledge reflection failed for ${noteId}: ${err?.message || String(err)}`);
@@ -550,6 +410,13 @@ export async function orchestrateReflection(
           // Reload topics in case Call 1 suggested new ones in an earlier session
           const latestTopics = await loadTopics(config);
           knowledgeResult = await curateKnowledge(allKnowledgeDeltas, latestTopics, config);
+        }
+
+        // Track which knowledge pages were updated for digest
+        for (const delta of allKnowledgeDeltas) {
+          if ("topic_slug" in delta && delta.topic_slug) {
+            knowledgePagesUpdated.add(delta.topic_slug);
+          }
         }
 
         // 7. Re-index knowledge pages, session notes, and digests in SQLite
@@ -659,6 +526,213 @@ export async function orchestrateReflection(
       }
     } catch (err: any) {
       errors.push(`Knowledge reflection pipeline failed: ${err?.message || String(err)}`);
+    }
+
+    // ========================================================================
+    // PLAYBOOK CURATION (runs after BOTH Phase 1 and Phase 3 generate deltas)
+    // ========================================================================
+
+    let globalResult: CurationResult | undefined;
+    let repoResult: CurationResult | undefined;
+    let autoOutcome: ReflectionOutcome["autoOutcome"] | undefined;
+
+    if (options.dryRun) {
+      dryRunDeltas = allDeltas;
+    } else if (allDeltas.length > 0) {
+      const performMerge = async () => {
+        // Reload fresh playbooks under lock
+        const globalPlaybook = await loadPlaybook(globalPath);
+        let repoPlaybook: Playbook | null = null;
+        if (hasRepo) {
+          repoPlaybook = await loadPlaybook(repoPath!);
+        }
+
+        // Create fresh merged context to ensure deduplication uses up-to-date data
+        const freshMerged = mergePlaybooks(globalPlaybook, repoPlaybook);
+
+        // Pre-process deltas to decompose 'merge' operations into atomic add/deprecate actions.
+        const processedDeltas: PlaybookDelta[] = [];
+
+        for (const delta of allDeltas) {
+          if (delta.type !== "merge") {
+            processedDeltas.push(delta);
+            continue;
+          }
+
+          const mergedContent = delta.mergedContent;
+          const threshold = typeof config.dedupSimilarityThreshold === "number" ? config.dedupSimilarityThreshold : 0.85;
+
+          const exactMatch = findFirstHashMatch(freshMerged, mergedContent);
+          if (exactMatch && !isActiveBullet(exactMatch)) {
+            warn(`[orchestrator] Skipping merge delta: merged content matches deprecated/blocked bullet ${exactMatch.id}`);
+            continue;
+          }
+
+          const replacement =
+            exactMatch && isActiveBullet(exactMatch)
+              ? exactMatch
+              : findBestActiveSimilarBullet(freshMerged, mergedContent, threshold);
+
+          if (replacement) {
+            for (const id of delta.bulletIds) {
+              if (id === replacement.id) continue;
+              processedDeltas.push({
+                type: "deprecate",
+                bulletId: id,
+                reason: `Merged into existing ${replacement.id}`,
+                replacedBy: replacement.id
+              });
+            }
+            continue;
+          }
+
+          const newBulletId = generateBulletId();
+          processedDeltas.push({
+            type: "add",
+            bullet: {
+              id: newBulletId,
+              content: mergedContent,
+              category: "merged",
+              tags: []
+            },
+            sourceSession: "merged-operation",
+            reason: delta.reason || "Merged from existing rules"
+          });
+
+          for (const id of delta.bulletIds) {
+            processedDeltas.push({
+              type: "deprecate",
+              bulletId: id,
+              reason: `Merged into ${newBulletId}`,
+              replacedBy: newBulletId
+            });
+          }
+        }
+
+        // Partition deltas (Routing Logic)
+        const globalDeltas: PlaybookDelta[] = [];
+        const repoDeltas: PlaybookDelta[] = [];
+
+        for (const delta of processedDeltas) {
+          let routed = false;
+          if ('bulletId' in delta && delta.bulletId) {
+            if (repoPlaybook && findBullet(repoPlaybook, delta.bulletId)) {
+              repoDeltas.push(delta);
+              routed = true;
+            } else if (findBullet(globalPlaybook, delta.bulletId)) {
+              globalDeltas.push(delta);
+              routed = true;
+            }
+          }
+          if (!routed) {
+            globalDeltas.push(delta);
+          }
+        }
+
+        // Apply Curation
+        if (globalDeltas.length > 0) {
+          globalResult = curatePlaybook(globalPlaybook, globalDeltas, config, freshMerged);
+          await savePlaybook(globalResult.playbook, globalPath, { updateLastReflection: true });
+        }
+
+        if (repoDeltas.length > 0 && repoPlaybook && repoPath) {
+          repoResult = curatePlaybook(repoPlaybook, repoDeltas, config, freshMerged);
+          await savePlaybook(repoResult.playbook, repoPath, { updateLastReflection: true });
+        }
+      };
+
+      // Execute Merge with Locking
+      await withLock(globalPath, async () => {
+        if (hasRepo && repoPath) {
+          await withLock(repoPath, performMerge);
+        } else {
+          await performMerge();
+        }
+      });
+
+      log(`Curated ${allDeltas.length} playbook delta(s)`);
+    }
+
+    // Auto-record rule outcomes (post-merge, best-effort)
+    if (pendingOutcomes.length > 0) {
+      try {
+        const records = [];
+        for (const input of pendingOutcomes) {
+          const record = await recordOutcome(input, config);
+          records.push(record);
+        }
+        const feedbackResult = await applyOutcomeFeedback(records, config);
+        autoOutcome = {
+          outcomesRecorded: records.length,
+          feedbackApplied: feedbackResult.applied,
+          missingRules: feedbackResult.missing,
+          inlineFeedbackDeltas: inlineFeedbackDeltaCount,
+        };
+        log(`Auto-recorded ${records.length} outcome(s): ${feedbackResult.applied} feedback event(s) applied`);
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        errors.push(`Auto-outcome recording failed: ${msg}`);
+        autoOutcome = {
+          outcomesRecorded: 0,
+          feedbackApplied: 0,
+          missingRules: [],
+          inlineFeedbackDeltas: inlineFeedbackDeltaCount,
+        };
+      }
+    } else if (inlineFeedbackDeltaCount > 0) {
+      autoOutcome = {
+        outcomesRecorded: 0,
+        feedbackApplied: 0,
+        missingRules: [],
+        inlineFeedbackDeltas: inlineFeedbackDeltaCount,
+      };
+    }
+
+    // ========================================================================
+    // DAILY DIGEST SYNTHESIS (Haiku)
+    // Single call after all sessions are processed — synthesizes a coherent
+    // daily summary with dedup, project grouping, and pipeline results.
+    // ========================================================================
+
+    if (!options.dryRun && digestSessions.length > 0) {
+      try {
+        // Collect bullet text for digest context
+        const bulletsAdded: string[] = [];
+        const bulletsHelpful: string[] = [];
+        const bulletsHarmful: string[] = [];
+        for (const delta of allDeltas) {
+          if (delta.type === "add" && delta.bullet?.content) {
+            bulletsAdded.push(delta.bullet.content);
+          } else if (delta.type === "helpful" && delta.bulletId) {
+            bulletsHelpful.push(delta.bulletId);
+          } else if (delta.type === "harmful" && delta.bulletId) {
+            bulletsHarmful.push(delta.bulletId);
+          }
+        }
+
+        const digestResult = await generateDailyDigest(
+          digestSessions,
+          {
+            bulletsAdded,
+            bulletsHelpful,
+            bulletsHarmful,
+            knowledgePagesUpdated: [...knowledgePagesUpdated],
+            errors: errors.slice(0, 3),
+          },
+          config,
+          options.io
+        );
+
+        // Write digest to file
+        const today = new Date().toISOString().split("T")[0];
+        const allTopics = digestResult.topics_touched.length > 0
+          ? digestResult.topics_touched
+          : [...new Set(digestSessions.flatMap(s => s.topics))];
+        await writeDigest(today, digestResult.summary, digestSessions.length, allTopics, config);
+        log(`Generated daily digest for ${today} (${digestSessions.length} sessions)`);
+      } catch (err: any) {
+        errors.push(`Digest generation failed: ${err?.message || String(err)}`);
+      }
     }
 
     return {
