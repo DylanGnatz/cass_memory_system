@@ -4,6 +4,7 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { indexNote } from './search'
 
 function memoryDir(): string {
   return path.join(os.homedir(), '.memory-system')
@@ -243,6 +244,7 @@ export async function createUserNote(title: string, content: string, topics?: st
   await fsp.mkdir(dir, { recursive: true })
   const filePath = path.join(dir, `${id}.md`)
   await fsp.writeFile(filePath, `${frontmatter}\n${content}`, 'utf-8')
+  indexNote(id, title, content)
   return id
 }
 
@@ -283,6 +285,7 @@ export async function saveUserNote(id: string, title: string, content: string): 
   const tmp = filePath + '.tmp'
   await fsp.writeFile(tmp, `${frontmatter}\n${content}`, 'utf-8')
   await fsp.rename(tmp, filePath)
+  indexNote(id, title, content)
 }
 
 export async function deleteUserNote(id: string): Promise<void> {

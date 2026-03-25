@@ -36,6 +36,7 @@ export interface KnowledgeSectionData {
 
 export interface SessionNoteSummary {
   id: string
+  title: string
   created: string
   last_updated: string
   abstract: string

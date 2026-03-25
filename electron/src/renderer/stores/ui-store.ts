@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type SidebarTab = 'encyclopedia' | 'recent' | 'starred' | 'notes' | 'review'
+export type SidebarTab = 'encyclopedia' | 'recent' | 'transcripts' | 'starred' | 'notes' | 'review'
 
 export type ContentView =
   | { type: 'none' }
@@ -10,6 +10,7 @@ export type ContentView =
   | { type: 'search' }
   | { type: 'user-note'; id: string }
   | { type: 'review-queue' }
+  | { type: 'transcript'; sessionId: string; filePath: string; hasSessionNote: boolean }
   | { type: 'settings' }
 
 interface DialogState {

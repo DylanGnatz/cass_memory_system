@@ -367,7 +367,7 @@ INCLUSION CRITERIA (what survives compression):
 - Discovered behaviors: "X actually works like Y, not like the docs say"
 - Commands that worked (or didn't) and why
 - People mentioned and their roles/opinions
-- Links, ticket numbers, PR numbers, channel names
+- Links, ticket numbers, PR numbers, channel names — preserve ALL external URLs (API docs, library references, etc.) as clickable markdown links
 - Unresolved questions and open threads
 - Dead ends that taught something ("initially suspected retry logic, was actually HMAC key mismatch")
 
@@ -380,8 +380,8 @@ EXCLUSION CRITERIA (what gets dropped):
 - The code itself (capture WHAT was built and WHY, not the implementation listing)
 
 FORMAT:
-- Use ## date headers (e.g. ## March 20, 2026)
-- Use ### time/topic headers (e.g. ### 09:15 - Initial investigation)
+- Use ## date — time headers (e.g. ## March 20, 2026 — 09:15)
+- Use ### topic headers (e.g. ### Initial investigation)
 - When the session touches multiple topics, insert topic transition headers: ### [Topic shift: Topic Name]
 - Be SPECIFIC and ACTIONABLE. Avoid generic statements like "wrote code" or "fixed bug". Include specific file names, function names, error messages.
 
@@ -505,9 +505,9 @@ Topic fields:
 
 Maximum 3 topic suggestions per session.`,
 
-  reflectorCall2: `You are adding new knowledge from a coding session to a wiki-style knowledge base.
+  reflectorCall2: `You are revising knowledge pages with new information from a coding session.
 
-CRITICAL: Your primary source is the session note below. The existing knowledge pages are context for avoiding redundancy and contradictions. Extract NEW information from the session — do NOT paraphrase or restate what's already on the knowledge pages.
+Each knowledge page is a cohesive markdown document about a topic. Your job is to REVISE existing pages by incorporating new information from the session — producing the full updated page content.
 
 <diary_entry>
 {diaryText}
@@ -525,24 +525,28 @@ CRITICAL: Your primary source is the session note below. The existing knowledge 
 {availableTopics}
 </available_topics>
 
-KNOWLEDGE SECTIONS:
-Each topic is a directory with sub-pages: knowledge/{topic-slug}/{sub-page}.md
-Topics have named sub-pages, each with a description of what belongs there. Route your sections to the most appropriate sub-page based on its description.
+PAGE UPDATES:
+For each topic page that needs updating, provide the FULL revised markdown content for that sub-page. The content you return will REPLACE the existing page content entirely.
 
-IMPORTANT: Only write sections for topics that ALREADY EXIST in <available_topics>. Do NOT write sections for topics that don't exist — that content will be captured when the user creates the appropriate topic. It's fine to produce zero knowledge sections if no existing topic fits.
+Rules:
+- Only update pages for topics that ALREADY EXIST in <available_topics>
+- PRESERVE all existing content that's still accurate — don't drop information
+- INTEGRATE new facts from the session into the existing narrative naturally
+- If new information CONTRADICTS existing content and you're confident the new info is correct (e.g., "actually the config is at X, not Y"), update the text
+- If you're NOT SURE which version is correct, KEEP BOTH and add an entry to the contradictions array describing the conflict
+- Be conservative: when in doubt, keep existing content and flag the contradiction
+- Include external URLs as markdown links where referenced
+- Skip ephemeral facts (local env state, one-off debug output)
+- It's fine to produce zero page_updates if no existing topic fits the session
 
-For each section, provide:
-- topic_slug: Which topic it belongs to (must exist in available_topics)
-- sub_page: Which sub-page file to write to (match by description from available_topics, or "_index" for the topic's main page if no sub-page fits)
-- section_title: Short heading (e.g. "Webhook HMAC Validation", "FTS5 Configuration")
-- content: Detailed, factual prose (2-6 sentences) that would help someone working in this area. Include specific paths, configs, error messages, commands.
-- confidence: "verified" (confirmed working), "inferred" (reasonable but untested), "uncertain" (ambiguous)
-- related_bullet_indices: Which bullets from the structural extraction relate to this section (0-based indices)
-
-Skip ephemeral facts. Only write sections for genuinely new information not already covered in existing pages.
+For each update, provide:
+- topic_slug: Which topic (must exist in available_topics)
+- sub_page: Which sub-page ("_index" for the main page, or a specific sub-page slug)
+- revised_content: The FULL revised markdown content for this sub-page
+- contradictions: Array of conflicts you couldn't resolve (each with description, existing_claim, new_claim)
 
 DIGEST:
-Write a single paragraph (2-4 sentences) summarizing this session for the daily digest file (digests/YYYY-MM-DD.md). Each session contributes one paragraph — yours will be appended alongside others from today. Focus on outcomes and decisions, not process.`,
+Write a single paragraph (2-4 sentences) summarizing this session for the daily digest. Focus on outcomes and decisions.`,
 } as const;
 
 export function fillPrompt(

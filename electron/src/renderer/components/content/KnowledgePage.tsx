@@ -202,9 +202,19 @@ export default function KnowledgePage({ slug, subPage }: Props): React.ReactElem
               />
             </div>
             <div className="kp-section__meta">
-              {section.source && <span>Source: {section.source}</span>}
+              {section.source && (
+                section.source.startsWith('session-') ? (
+                  <span
+                    className="kp-section__source-link"
+                    onClick={(e) => { e.stopPropagation(); navigate({ type: 'session', id: section.source }) }}
+                  >
+                    Source: {section.source}
+                  </span>
+                ) : (
+                  <span>Source: {section.source}</span>
+                )
+              )}
               {section.added && <span>Added: {section.added}</span>}
-              {section.id && <span>ID: {section.id}</span>}
             </div>
             <div className="kp-section__content">
               <MarkdownRenderer content={section.content} />

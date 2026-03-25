@@ -2,6 +2,7 @@ import React, { useCallback, useRef, useEffect } from 'react'
 import { useUIStore, type SidebarTab } from '../../stores/ui-store'
 import EncyclopediaTab from '../sidebar/EncyclopediaTab'
 import RecentTab from '../sidebar/RecentTab'
+import TranscriptsTab from '../sidebar/TranscriptsTab'
 import StarredTab from '../sidebar/StarredTab'
 import MyNotesTab from '../sidebar/MyNotesTab'
 import ReviewQueueTab, { useReviewCount } from '../sidebar/ReviewQueueTab'
@@ -9,6 +10,7 @@ import ReviewQueueTab, { useReviewCount } from '../sidebar/ReviewQueueTab'
 const TABS: { id: SidebarTab; icon: string; label: string }[] = [
   { id: 'encyclopedia', icon: '\u25A6', label: 'Topics' },
   { id: 'recent',       icon: '\u25F7', label: 'Recent' },
+  { id: 'transcripts',  icon: '\u25CE', label: 'Transcripts' },
   { id: 'starred',      icon: '\u2606', label: 'Starred' },
   { id: 'notes',        icon: '\u270E', label: 'Notes' },
   { id: 'review',       icon: '\u2691', label: 'Review' },
@@ -29,7 +31,6 @@ export default function Sidebar(): React.ReactElement {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging.current) return
-      // Direct DOM update — no React re-render during drag
       const clamped = Math.max(180, Math.min(500, e.clientX))
       const shell = document.querySelector('.app-shell') as HTMLElement
       if (shell) {
@@ -41,7 +42,6 @@ export default function Sidebar(): React.ReactElement {
       isDragging.current = false
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
-      // Commit final width to Zustand (single re-render)
       const clamped = Math.max(180, Math.min(500, e.clientX))
       setSidebarWidth(clamped)
     }
@@ -74,6 +74,7 @@ export default function Sidebar(): React.ReactElement {
         <div className="sidebar__content">
           {activeTab === 'encyclopedia' && <EncyclopediaTab />}
           {activeTab === 'recent' && <RecentTab />}
+          {activeTab === 'transcripts' && <TranscriptsTab />}
           {activeTab === 'starred' && <StarredTab />}
           {activeTab === 'notes' && <MyNotesTab />}
           {activeTab === 'review' && <ReviewQueueTab />}

@@ -18,8 +18,11 @@ export function relativeTime(iso: string | null): string {
 
 /** Format a date string as "Mar 24, 2026" */
 export function formatDate(iso: string): string {
+  if (!iso) return ''
   try {
-    return new Date(iso).toLocaleDateString('en-US', {
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return iso
+    return d.toLocaleDateString('en-US', {
       month: 'short', day: 'numeric', year: 'numeric'
     })
   } catch {

@@ -618,12 +618,35 @@ export const TopicSuggestionItemSchema = z.object({
   }),
 });
 
+export const ContradictionClaimSchema = z.object({
+  claim: z.string(),
+  source: z.string(), // session ID or "user"
+  date: z.string(), // when the claim was made
+  confidence: z.enum(["verified", "inferred", "uncertain"]).optional(),
+  section_id: z.string().optional(), // knowledge page section ID if applicable
+});
+export type ContradictionClaim = z.infer<typeof ContradictionClaimSchema>;
+
+export const ContradictionItemSchema = z.object({
+  id: z.string(),
+  type: z.literal("contradiction"),
+  status: ReviewQueueStatusEnum.default("pending"),
+  created: z.string(),
+  target_topic: z.string(),
+  target_section: z.string(), // the section heading where the contradiction was found
+  data: z.object({
+    description: z.string(), // short description of what's contradicted
+    claims: z.array(ContradictionClaimSchema), // all competing assertions
+  }),
+});
+
 export const ReviewQueueItemSchema = z.discriminatedUnion("type", [
   ColdStartSuggestionItemSchema,
   BloatedPageItemSchema,
   StaleTopicItemSchema,
   UserFlagItemSchema,
   TopicSuggestionItemSchema,
+  ContradictionItemSchema,
 ]);
 export type ReviewQueueItem = z.infer<typeof ReviewQueueItemSchema>;
 
@@ -1090,6 +1113,7 @@ export type TopicsFile = z.infer<typeof TopicsFileSchema>;
 
 export const SessionNoteSchema = z.object({
   id: z.string().min(1),
+  title: z.string().default(""), // short display name, editable by user
   source_session: z.string(),
   last_offset: z.number().default(0),
   created: z.string(), // ISO 8601
@@ -1147,19 +1171,24 @@ export type TopicSuggestion = z.infer<typeof TopicSuggestionSchema>;
 
 // --- Knowledge Page Delta (Curator operations) ---
 
-export const KnowledgePageAppendDeltaSchema = z.object({
-  type: z.literal("knowledge_page_append"),
+export const KnowledgePageUpdateDeltaSchema = z.object({
+  type: z.literal("knowledge_page_update"),
   topic_slug: z.string().min(1),
-  sub_page: z.string().default("_index"), // which sub-page to append to
-  section_id: z.string().min(1),
-  section_title: z.string(),
-  content: z.string(),
-  confidence: ConfidenceTierEnum,
+  sub_page: z.string().default("_index"),
+  revised_content: z.string(), // full revised markdown body for this sub-page
   source_session: z.string(),
-  added_date: z.string(), // ISO 8601
-  related_bullets: z.array(z.string()).default([]),
+  updated_date: z.string(), // ISO 8601
+  contradictions: z.array(z.object({
+    description: z.string(),
+    existing_claim: z.string(),
+    new_claim: z.string(),
+  })).default([]), // flagged contradictions the LLM was unsure about
 });
-export type KnowledgePageAppendDelta = z.infer<typeof KnowledgePageAppendDeltaSchema>;
+export type KnowledgePageUpdateDelta = z.infer<typeof KnowledgePageUpdateDeltaSchema>;
+
+// Keep the old type name as an alias for backward compatibility in tests
+export const KnowledgePageAppendDeltaSchema = KnowledgePageUpdateDeltaSchema;
+export type KnowledgePageAppendDelta = KnowledgePageUpdateDelta;
 
 export const DigestUpdateDeltaSchema = z.object({
   type: z.literal("digest_update"),
@@ -1179,7 +1208,7 @@ export const TopicSuggestionDeltaSchema = z.object({
 export type TopicSuggestionDelta = z.infer<typeof TopicSuggestionDeltaSchema>;
 
 export const KnowledgeDeltaSchema = z.discriminatedUnion("type", [
-  KnowledgePageAppendDeltaSchema,
+  KnowledgePageUpdateDeltaSchema,
   DigestUpdateDeltaSchema,
   TopicSuggestionDeltaSchema,
 ]);
@@ -1206,16 +1235,18 @@ export const ReflectorCall1OutputSchema = z.object({
 });
 export type ReflectorCall1Output = z.infer<typeof ReflectorCall1OutputSchema>;
 
-// Call 2 output: generative/narrative — knowledge page prose + digest
+// Call 2 output: generative/narrative — knowledge page revisions + digest
 export const ReflectorCall2OutputSchema = z.object({
-  knowledge_sections: z.array(z.object({
+  page_updates: z.array(z.object({
     topic_slug: z.string().min(1),
-    sub_page: z.string().default("_index"), // which sub-page to write to
-    section_title: z.string().min(1),
-    content: z.string().min(1), // prose paragraph(s)
-    confidence: ConfidenceTierEnum,
-    related_bullet_indices: z.array(z.number().int().nonnegative()).default([]), // indices into Call 1 bullets
-  })),
+    sub_page: z.string().default("_index"),
+    revised_content: z.string().min(1), // full revised markdown for this sub-page
+    contradictions: z.array(z.object({
+      description: z.string(),
+      existing_claim: z.string(),
+      new_claim: z.string(),
+    })).default([]), // cases where the LLM couldn't determine which claim is correct
+  })).default([]),
   digest_content: z.string(), // chronological narrative summary for the day
 });
 export type ReflectorCall2Output = z.infer<typeof ReflectorCall2OutputSchema>;
@@ -1284,6 +1315,7 @@ export const ProcessingStateSchema = z.object({
   lastReflectionRun: z.string().optional(),
   lastIndexUpdate: z.string().optional(),
   lastPeriodicJobRun: z.string().optional(),
+  installedAt: z.string().optional(), // ISO 8601 — when the system was first run
 });
 export type ProcessingState = z.infer<typeof ProcessingStateSchema>;
 

@@ -59,7 +59,8 @@ INSTRUCTIONS:
 - Set confidence: "verified" (confirmed in multiple sessions or explicitly tested), "inferred" (reasonable conclusion from one session), "uncertain" (ambiguous or contradictory)
 - Cover everything substantive — the goal is a comprehensive reference for this topic
 - Organize logically: group related information into sections with clear headings
-- Skip only truly ephemeral details (local env state, temporary debug output)`;
+- Skip only truly ephemeral details (local env state, temporary debug output)
+- Preserve external references: if the content mentions API docs, library documentation, issue tracker URLs, or other external links, include them as markdown links under a "References:" line at the end of relevant sections`;
 
 interface RankedContent {
   source: string;     // e.g. "session-abc123" or "fts:knowledge"
@@ -263,13 +264,30 @@ export async function generateKnowledgePage(
     });
   }
 
-  // Write all sub-pages
+  // Write all sub-pages and index into FTS
+  let searchIndex: ReturnType<typeof openSearchIndex> | null = null;
+  try {
+    searchIndex = openSearchIndex(config.searchDbPath);
+  } catch { /* no search index */ }
+
   for (const [sub, page] of pagesBySubPage) {
     page.frontmatter.last_updated = today;
     await writeKnowledgePage(topic.slug, page, config, sub);
     log(`Wrote ${page.sections.length} sections to ${topic.slug}/${sub}`);
+
+    // Index into FTS for search
+    if (searchIndex) {
+      for (const section of page.sections) {
+        searchIndex.indexKnowledge({
+          topic: `${topic.slug}/${sub}`,
+          section_title: section.title,
+          content: section.content,
+        });
+      }
+    }
   }
 
+  searchIndex?.close();
   log(`Knowledge generation complete for "${topic.slug}": ${output.sections.length} sections`);
   return { sectionsGenerated: output.sections.length };
 }

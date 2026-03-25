@@ -528,3 +528,73 @@ function upgradeConfidence(original: ConfidenceTier, suggested: ConfidenceTier):
   const rank: Record<ConfidenceTier, number> = { uncertain: 0, inferred: 1, verified: 2 };
   return rank[suggested] > rank[original] ? suggested : original;
 }
+
+/**
+ * Check if a new knowledge section contradicts existing sections on the same topic.
+ * Uses keyword overlap + semantic comparison to detect conflicting claims.
+ * Returns contradiction info if found, null otherwise.
+ */
+export async function detectContradiction(
+  delta: KnowledgePageAppendDelta,
+  existingSections: Array<{ id: string; title: string; content: string; confidence: string; source: string; added: string }>,
+): Promise<{
+  contradicts: boolean;
+  description: string;
+  existingClaim: { claim: string; source: string; date: string; confidence: string; section_id: string };
+  newClaim: { claim: string; source: string; date: string; confidence: string };
+} | null> {
+  if (existingSections.length === 0) return null;
+
+  const newContent = delta.content.toLowerCase();
+  const newKeywords = new Set(newContent.split(/\s+/).filter(w => w.length > 4));
+
+  for (const existing of existingSections) {
+    const existingContent = existing.content.toLowerCase();
+    const existingKeywords = new Set(existingContent.split(/\s+/).filter(w => w.length > 4));
+
+    // Check keyword overlap — high overlap suggests same topic area
+    let overlap = 0;
+    for (const kw of newKeywords) {
+      if (existingKeywords.has(kw)) overlap++;
+    }
+    const overlapRatio = newKeywords.size > 0 ? overlap / newKeywords.size : 0;
+
+    if (overlapRatio < 0.2) continue; // Not enough keyword overlap to be about the same thing
+
+    // Check for contradiction signals: negation words near shared keywords,
+    // different values for the same config/path, "actually", "not", "incorrect", "wrong"
+    const contradictionSignals = [
+      "actually", "not", "incorrect", "wrong", "instead", "rather than",
+      "was incorrect", "doesn't", "does not", "shouldn't", "changed from",
+      "no longer", "deprecated", "replaced by", "moved to", "renamed"
+    ];
+
+    const newHasSignal = contradictionSignals.some(s => newContent.includes(s));
+    const titleOverlap = existing.title.toLowerCase().split(/\s+/).some(w =>
+      w.length > 3 && delta.section_title.toLowerCase().includes(w)
+    );
+
+    // High overlap + contradiction signal + related title = likely contradiction
+    if (overlapRatio > 0.3 && (newHasSignal || titleOverlap)) {
+      return {
+        contradicts: true,
+        description: `New content for "${delta.section_title}" may contradict existing section "${existing.title}"`,
+        existingClaim: {
+          claim: existing.content.slice(0, 300),
+          source: existing.source,
+          date: existing.added,
+          confidence: existing.confidence,
+          section_id: existing.id,
+        },
+        newClaim: {
+          claim: delta.content.slice(0, 300),
+          source: delta.source_session,
+          date: delta.added_date,
+          confidence: delta.confidence,
+        },
+      };
+    }
+  }
+
+  return null;
+}

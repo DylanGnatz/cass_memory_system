@@ -10,6 +10,7 @@ import {
   KnowledgePageSection,
   ParsedKnowledgePage,
   KnowledgePageAppendDelta,
+  KnowledgePageUpdateDelta,
   TopicsFile,
   TopicsFileSchema,
   Topic,
@@ -374,6 +375,74 @@ export async function appendSectionToPage(
   log(`Appended section "${delta.section_title}" to ${delta.topic_slug}/${subPage}`);
 
   return { written: true, reason: "Section appended" };
+}
+
+/**
+ * Update a knowledge page sub-page with revised content.
+ * Replaces the body while preserving the YAML frontmatter.
+ * This is the primary write path for the new cohesive-document model.
+ */
+export async function updatePageContent(
+  delta: KnowledgePageUpdateDelta,
+  topic: Topic,
+  config: Config
+): Promise<{ written: boolean; reason: string }> {
+  const subPage = delta.sub_page || "_index";
+  let page = await loadKnowledgePage(delta.topic_slug, config, subPage);
+
+  if (!page) {
+    // Create new page with the revised content
+    const today = new Date().toISOString().split("T")[0];
+    page = {
+      frontmatter: {
+        topic: topic.name,
+        description: topic.description,
+        source: topic.source,
+        created: today,
+        last_updated: today,
+      },
+      sections: [], // sections will be empty — body is in revised_content
+      raw: "",
+    };
+  }
+
+  // Update frontmatter date
+  page.frontmatter.last_updated = new Date().toISOString().split("T")[0];
+
+  // For the new model, we store content directly as the page body.
+  // Serialize frontmatter + revised content (no section metadata comments).
+  const frontmatterYaml = [
+    "---",
+    `topic: ${page.frontmatter.topic}`,
+    `description: "${page.frontmatter.description}"`,
+    `source: ${page.frontmatter.source}`,
+    `created: ${page.frontmatter.created}`,
+    `last_updated: ${page.frontmatter.last_updated}`,
+    `last_source: ${delta.source_session}`,
+    "---",
+  ].join("\n");
+
+  const fullContent = `${frontmatterYaml}\n\n${delta.revised_content}`;
+  const filePath = subPagePath(delta.topic_slug, subPage, config);
+  await ensureDir(path.dirname(filePath));
+  await withLock(filePath, async () => {
+    await atomicWrite(filePath, fullContent);
+  });
+
+  // Index into FTS for search
+  try {
+    const { openSearchIndex } = await import("./search.js");
+    const idx = openSearchIndex(config.searchDbPath);
+    idx.indexKnowledge({
+      topic: `${delta.topic_slug}/${subPage}`,
+      section_title: topic.name,
+      content: delta.revised_content,
+    });
+    idx.close();
+  } catch { /* search index may not exist yet */ }
+
+  log(`Updated knowledge page: ${delta.topic_slug}/${subPage} (source: ${delta.source_session})`);
+  return { written: true, reason: `Page revised from ${delta.source_session}` };
 }
 
 // ============================================================================

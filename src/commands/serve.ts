@@ -60,7 +60,7 @@ type JsonRpcResponse =
 const TOOL_DEFS = [
   {
     name: "cm_context",
-    description: "Get relevant playbook rules, knowledge page excerpts, related topics, and recent session context for a task. Returns searchResults from SQLite FTS, topic excerpts from knowledge pages, related topics by semantic similarity, and unprocessed session notes.",
+    description: "Get relevant knowledge for a task. Returns full knowledge page content for matching topics, matching user notes, and session note summaries. If a session summary looks relevant, call cm_detail with path 'session-notes/{id}.md' to read the full note.",
     inputSchema: {
       type: "object",
       properties: {
@@ -349,7 +349,12 @@ async function handleToolCall(name: string, args: any): Promise<any> {
         workspace: workspace.value,
         json: true
       });
-      return context.result;
+      const result = context.result as any;
+      // Add usage hint for the agent
+      if (result.sessionSummaries?.length > 0 || result.knowledgePageSummaries?.length > 0) {
+        result._hint = "To read full content, call cm_detail with the path. For session notes: 'session-notes/{id}.md' (id includes 'session-' prefix). For knowledge pages in summaries: use the path field directly (e.g. 'knowledge/gtfs/_index.md'). High-relevance knowledge pages are auto-included with full content above.";
+      }
+      return result;
     }
     case "cm_feedback": {
       assertArgs(args, { bulletId: "string" });

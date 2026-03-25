@@ -33,8 +33,9 @@ import {
   KnowledgeSearchHit, TopicExcerpt, RecentSession, RelatedTopic,
 } from "../types.js";
 import { cosineSimilarity, embedText, loadOrComputeEmbeddingsForBullets } from "../semantic.js";
-import { loadTopics, loadKnowledgePage, parseKnowledgePage } from "../knowledge-page.js";
+import { loadTopics, loadKnowledgePage, parseKnowledgePage, listSubPages } from "../knowledge-page.js";
 import { findUnprocessedSessionNotes, loadProcessingState, parseSessionNote } from "../session-notes.js";
+import { listUserNotes, loadUserNote } from "../user-notes.js";
 import chalk from "chalk";
 import { agentIconPrefix, formatRule, formatTipPrefix, getOutputStyle, iconPrefix, wrapText } from "../output.js";
 import { createProgress, type ProgressReporter } from "../progress.js";
@@ -95,6 +96,10 @@ export function buildContextResult(
     relatedTopics?: RelatedTopic[];
     suggestedDeepDives?: string[];
     lastReflectionRun?: string;
+    knowledgePages?: KnowledgePageMatch[];
+    knowledgePageSummaries?: KnowledgePageMatch[];
+    userNotes?: { id: string; title: string; content: string }[];
+    sessionSummaries?: { id: string; title: string; abstract: string; topics: string[]; date: string; processed: boolean }[];
   }
 ): ContextResult {
   // Apply size limits
@@ -144,6 +149,27 @@ export function buildContextResult(
   if (phase4?.relatedTopics?.length) result.relatedTopics = phase4.relatedTopics;
   if (phase4?.suggestedDeepDives?.length) result.suggestedDeepDives = phase4.suggestedDeepDives;
   if (phase4?.lastReflectionRun) result.lastReflectionRun = phase4.lastReflectionRun;
+
+  // Knowledge pages: full content for high-relevance, summaries for others
+  if (phase4?.knowledgePages?.length) {
+    (result as any).knowledgePageContent = phase4.knowledgePages.map(kp => ({
+      topic: kp.topic, slug: kp.slug, subPage: kp.subPage, content: kp.content,
+      relevance: kp.relevance,
+    }));
+  }
+  if (phase4?.knowledgePageSummaries?.length) {
+    (result as any).knowledgePageSummaries = phase4.knowledgePageSummaries.map(kp => ({
+      topic: kp.topic, slug: kp.slug, subPage: kp.subPage,
+      description: kp.description, wordCount: kp.wordCount,
+      relevance: kp.relevance, path: kp.path,
+    }));
+  }
+  if (phase4?.userNotes?.length) {
+    (result as any).userNotes = phase4.userNotes;
+  }
+  if (phase4?.sessionSummaries?.length) {
+    (result as any).sessionSummaries = phase4.sessionSummaries;
+  }
 
   return result;
 }
@@ -290,62 +316,173 @@ async function searchKnowledgeBase(
  * Gather topic excerpts matching the task description.
  * Keyword + semantic match against topic names/descriptions, then load matching pages.
  */
-async function gatherTopicExcerpts(
+interface KnowledgePageMatch {
+  topic: string;
+  slug: string;
+  subPage: string;
+  description: string;
+  wordCount: number;
+  relevance: number; // 0-1, higher = more relevant to query
+  content?: string;  // only set for auto-included high-relevance pages
+  path: string;      // for cm_detail
+}
+
+/**
+ * Gather knowledge page summaries ranked by relevance.
+ * Uses 3 signals: topic name/description keyword match, sub-page matching, FTS body match.
+ * High-relevance pages (top matches) get full content auto-included.
+ * Others get summaries so the agent can cm_detail as needed.
+ */
+async function gatherKnowledgePages(
   task: string,
   keywords: string[],
   config: Config
-): Promise<TopicExcerpt[]> {
-  const excerpts: TopicExcerpt[] = [];
+): Promise<KnowledgePageMatch[]> {
+  const results: KnowledgePageMatch[] = [];
   try {
     const topics = await loadTopics(config);
-    if (topics.length === 0) return excerpts;
+    if (topics.length === 0) return results;
 
-    // Keyword matching first (fast)
     const keywordLower = keywords.map(k => k.toLowerCase());
-    const matchedSlugs = new Set<string>();
 
+    // Score each topic by multiple signals
     for (const topic of topics) {
-      const combined = `${topic.slug} ${topic.name} ${topic.description}`.toLowerCase();
-      if (keywordLower.some(k => combined.includes(k))) {
-        matchedSlugs.add(topic.slug);
-      }
-    }
+      const subPageText = (topic.subpages || []).map(sp =>
+        `${sp.slug.replace(/-/g, " ")} ${sp.name} ${sp.description}`
+      ).join(" ");
+      const combinedText = `${topic.slug.replace(/-/g, " ")} ${topic.name} ${topic.description} ${subPageText}`.toLowerCase();
+      const words = combinedText.split(/\s+/);
 
-    // Semantic matching (if available)
-    try {
-      const taskEmbedding = await embedText(task);
-      for (const topic of topics) {
-        if (matchedSlugs.has(topic.slug)) continue;
+      // Signal 1: keyword match against topic metadata
+      const keywordMatches = keywordLower.filter(k =>
+        words.some(w => w === k || (k.length >= 4 && w.startsWith(k)))
+      ).length;
+      const keywordScore = keywordMatches / Math.max(keywordLower.length, 1);
+
+      // Signal 2: semantic similarity (if available)
+      let semanticScore = 0;
+      try {
+        const taskEmbedding = await embedText(task);
         const descEmbedding = await embedText(`${topic.name}: ${topic.description}`);
-        const sim = cosineSimilarity(taskEmbedding, descEmbedding);
-        if (sim >= 0.3) {
-          matchedSlugs.add(topic.slug);
-        }
+        semanticScore = Math.max(0, cosineSimilarity(taskEmbedding, descEmbedding));
+      } catch { /* semantic unavailable */ }
+
+      // Metadata relevance (before body check)
+      const metadataRelevance = Math.max(keywordScore, semanticScore);
+
+      // Load sub-pages for this topic — always check body content too
+      const subPages = await listSubPages(topic.slug, config);
+      const pagesToCheck = subPages.length > 0 ? subPages : ["_index"];
+
+      for (const sp of pagesToCheck) {
+        const page = await loadKnowledgePage(topic.slug, config, sp);
+        if (!page) continue;
+        const body = page.raw.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/)?.[1]?.trim();
+        if (!body) continue;
+
+        // Signal 3: keyword match against page body (word-boundary aware)
+        const bodyWords = new Set(body.toLowerCase().split(/\W+/).filter(w => w.length > 2));
+        const bodyMatches = keywordLower.filter(k => bodyWords.has(k)).length;
+        const bodyScore = bodyMatches / Math.max(keywordLower.length, 1);
+        const finalRelevance = Math.max(metadataRelevance, bodyScore * 0.8);
+
+        // Skip pages with no relevance at all
+        if (finalRelevance < 0.1) continue;
+
+        const spDef = (topic.subpages || []).find(s => s.slug === sp);
+        const wordCount = body.split(/\s+/).length;
+        const pagePath = subPages.length > 0
+          ? `knowledge/${topic.slug}/${sp}.md`
+          : `knowledge/${topic.slug}.md`;
+
+        results.push({
+          topic: topic.name,
+          slug: topic.slug,
+          subPage: sp,
+          description: spDef?.description || topic.description,
+          wordCount,
+          relevance: Math.round(finalRelevance * 100) / 100,
+          path: pagePath,
+          // Auto-include full content for high-relevance pages (top matches)
+          content: finalRelevance >= 0.4 ? body : undefined,
+        });
       }
-    } catch {
-      // Semantic unavailable — keyword-only
-    }
-
-    // Load matching pages and extract section previews
-    for (const slug of matchedSlugs) {
-      const page = await loadKnowledgePage(slug, config);
-      if (!page || page.sections.length === 0) continue;
-
-      const topic = topics.find(t => t.slug === slug);
-      excerpts.push({
-        topic: topic?.name || slug,
-        slug,
-        sections: page.sections.slice(0, 5).map(s => ({
-          title: s.title,
-          preview: s.content.slice(0, 150).replace(/\n/g, " ").trim(),
-        })),
-      });
     }
   } catch {
-    // Empty knowledge base — no excerpts
+    // Empty knowledge base
   }
 
-  return excerpts.slice(0, 5); // Cap at 5 topics
+  // Sort by relevance descending
+  results.sort((a, b) => b.relevance - a.relevance);
+  return results;
+}
+
+/**
+ * Find matching user notes — returns full note content for matches.
+ */
+async function findMatchingUserNotes(
+  keywords: string[],
+  config: Config
+): Promise<{ id: string; title: string; content: string }[]> {
+  const results: { id: string; title: string; content: string }[] = [];
+  try {
+    const notes = await listUserNotes(config);
+    const keywordLower = keywords.map(k => k.toLowerCase());
+
+    for (const noteMeta of notes) {
+      const titleLower = noteMeta.title.toLowerCase();
+      const topicsLower = noteMeta.topics.join(" ").toLowerCase();
+      if (keywordLower.some(k => titleLower.includes(k) || topicsLower.includes(k))) {
+        const full = await loadUserNote(noteMeta.id, config);
+        if (full) {
+          results.push({ id: noteMeta.id, title: full.frontmatter.title, content: full.body });
+        }
+      }
+    }
+  } catch { /* no user notes */ }
+  return results;
+}
+
+/**
+ * Get session note summaries (title, abstract, topics, date).
+ * Used for both unprocessed and processed notes in the tiered system.
+ */
+async function getSessionNoteSummaries(
+  config: Config,
+  options?: { processedOnly?: boolean; unprocessedOnly?: boolean; limit?: number }
+): Promise<{ id: string; title: string; abstract: string; topics: string[]; date: string; processed: boolean }[]> {
+  const summaries: { id: string; title: string; abstract: string; topics: string[]; date: string; processed: boolean }[] = [];
+  try {
+    const notesDir = expandPath(config.sessionNotesDir);
+    const files = await (await import("node:fs/promises")).readdir(notesDir);
+
+    for (const file of files) {
+      if (!file.endsWith(".md")) continue;
+      try {
+        const raw = await (await import("node:fs/promises")).readFile(
+          (await import("node:path")).join(notesDir, file), "utf-8"
+        );
+        const parsed = parseSessionNote(raw);
+        const fm = parsed.frontmatter;
+
+        if (options?.processedOnly && !fm.processed) continue;
+        if (options?.unprocessedOnly && fm.processed) continue;
+
+        summaries.push({
+          id: fm.id,
+          title: fm.title || "",
+          abstract: fm.abstract || "",
+          topics: fm.topics_touched || [],
+          date: fm.last_updated || fm.created || "",
+          processed: fm.processed,
+        });
+      } catch { /* skip */ }
+    }
+
+    summaries.sort((a, b) => b.date.localeCompare(a.date));
+    if (options?.limit) return summaries.slice(0, options.limit);
+  } catch { /* no notes dir */ }
+  return summaries;
 }
 
 /**
@@ -612,13 +749,80 @@ export async function generateContextResult(
 
   let degraded: ContextResult["degraded"] | undefined = searchDegraded;
 
-  // Phase 4: Gather topic excerpts, related topics, unprocessed sessions
-  const [topicExcerpts, relatedTopics, recentSessions, processingState] = await Promise.all([
-    gatherTopicExcerpts(task, keywords, config),
+  // Phase 4: Tiered context retrieval
+  // Tier 1: Full knowledge pages + user notes + relevant session summaries
+  const [knowledgePages, userNotes, allSessionSummaries, relatedTopics, processingState] = await Promise.all([
+    gatherKnowledgePages(task, keywords, config),
+    findMatchingUserNotes(keywords, config),
+    getSessionNoteSummaries(config, { limit: 30 }),
     findRelatedTopics(task, config),
-    getUnprocessedSessions(config),
     loadProcessingState(config),
   ]);
+
+  // Filter session summaries by relevance to the query
+  // Exclude generic stop words that match everything
+  const CONTEXT_STOP_WORDS = new Set([
+    "implement", "create", "build", "make", "add", "fix", "update", "change",
+    "new", "use", "using", "handle", "should", "want", "need", "like",
+    "how", "what", "where", "when", "does", "work", "working",
+    "the", "for", "with", "from", "that", "this", "into",
+    "api", "app", "data", "code", "file", "user", "system",
+  ]);
+  const specificKeywords = keywords.map(k => k.toLowerCase()).filter(k => !CONTEXT_STOP_WORDS.has(k) && k.length > 2);
+  const scoredSummaries = allSessionSummaries.map(s => {
+    if (specificKeywords.length === 0) return { ...s, relevance: 0 };
+    const searchable = `${s.title} ${s.abstract} ${s.topics.join(" ")}`.toLowerCase();
+    const matchCount = specificKeywords.filter(k => searchable.includes(k)).length;
+    return { ...s, relevance: matchCount / Math.max(specificKeywords.length, 1) };
+  });
+
+  // Tier 1: unprocessed summaries (always) + relevant processed summaries
+  const unprocessedSummaries = scoredSummaries.filter(s => !s.processed);
+  const relevantProcessed = scoredSummaries
+    .filter(s => s.processed && s.relevance > 0)
+    .sort((a, b) => b.relevance - a.relevance);
+
+  // Tier 2 threshold calculated below after autoIncludedPages is defined
+  let includeTier2 = false;
+  // Tier 2 fallback: only include recent processed notes (not random ones with 0 relevance)
+  const fallbackProcessed = includeTier2
+    ? scoredSummaries.filter(s => s.processed && s.relevance === 0).slice(0, 3)
+    : [];
+
+  // Filter out completely irrelevant unprocessed summaries too (keep those with some match or very recent)
+  const filteredUnprocessed = unprocessedSummaries.filter(s =>
+    s.relevance > 0 || (Date.now() - new Date(s.date).getTime() < 7 * 86_400_000) // keep last 7 days regardless
+  );
+
+  // Separate auto-included (full content) from summary-only knowledge pages
+  const autoIncludedPages = knowledgePages.filter(kp => kp.content);
+  const summaryOnlyPages = knowledgePages.filter(kp => !kp.content);
+
+  // Tier 2: if Tier 1 is thin on content, include fallback session summaries
+  const tier1Tokens = autoIncludedPages.reduce((sum, p) => sum + (p.content?.length || 0) / 4, 0)
+    + userNotes.reduce((sum, n) => sum + n.content.length / 4, 0);
+  includeTier2 = tier1Tokens < 2000;
+
+  // Build topic excerpts for backward compat
+  const topicExcerpts: TopicExcerpt[] = [];
+  const seenTopics = new Set<string>();
+  for (const kp of knowledgePages) {
+    if (seenTopics.has(kp.slug)) continue;
+    seenTopics.add(kp.slug);
+    topicExcerpts.push({
+      topic: kp.topic,
+      slug: kp.slug,
+      sections: [{ title: kp.subPage === "_index" ? "Overview" : kp.subPage, preview: kp.description.slice(0, 200) }],
+    });
+  }
+
+  // Build recent sessions from unprocessed summaries (backward compat for old output format)
+  const recentSessions: RecentSession[] = filteredUnprocessed.slice(0, 3).map(s => ({
+    id: s.id,
+    date: s.date,
+    abstract: s.abstract,
+    note_text: `**${s.title || s.abstract.slice(0, 50)}**\nTopics: ${s.topics.join(", ") || "none"}`,
+  }));
 
   const suggestedDeepDives = generateDeepDives(topicExcerpts, searchHits);
   const lastReflectionRun = processingState.lastReflectionRun;
@@ -651,7 +855,21 @@ export async function generateContextResult(
       maxBullets: flags.limit ?? flags.top ?? config.maxBulletsInContext,
       maxHistory: flags.history ?? config.maxHistoryInContext,
     },
-    { topicExcerpts, relatedTopics, recentSessions, suggestedDeepDives, lastReflectionRun }
+    {
+      topicExcerpts,
+      relatedTopics,
+      recentSessions,
+      suggestedDeepDives,
+      lastReflectionRun,
+      knowledgePages: autoIncludedPages,
+      knowledgePageSummaries: summaryOnlyPages,
+      userNotes,
+      sessionSummaries: [
+        ...filteredUnprocessed,
+        ...relevantProcessed,
+        ...fallbackProcessed,
+      ],
+    }
   );
   if (degraded) {
     result.degraded = degraded;

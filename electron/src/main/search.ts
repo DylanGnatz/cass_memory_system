@@ -9,7 +9,7 @@ import type { SearchResult } from './types'
 
 let db: Database.Database | null = null
 
-/** Open search.db in readonly mode. Returns null if file doesn't exist. */
+/** Open search.db in readwrite mode (for search + indexing). Returns null if file doesn't exist. */
 function getDb(): Database.Database | null {
   if (db) return db
 
@@ -20,7 +20,7 @@ function getDb(): Database.Database | null {
   }
 
   try {
-    db = new Database(dbPath, { readonly: true })
+    db = new Database(dbPath)
     console.log('[search] Opened search.db at', dbPath)
     return db
   } catch (err) {
@@ -41,6 +41,18 @@ export function closeSearchDb(): void {
 export function reopenSearchDb(): void {
   closeSearchDb()
   // Will be lazily reopened on next query
+}
+
+/** Index a user note into FTS. */
+export function indexNote(id: string, title: string, content: string): void {
+  const database = getDb()
+  if (!database) return
+  try {
+    database.prepare('DELETE FROM fts_notes WHERE id = ?').run(id)
+    database.prepare('INSERT INTO fts_notes (id, title, content) VALUES (?, ?, ?)').run(id, title, content)
+  } catch (err) {
+    console.error('[search] Failed to index note:', err)
+  }
 }
 
 /**

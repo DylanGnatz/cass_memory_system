@@ -253,20 +253,22 @@ export class SearchIndex {
     const tables = options?.tables ?? ["knowledge", "sessions", "transcripts", "notes", "digests"];
     const results: SearchHit[] = [];
 
-    // Escape query for FTS5: wrap each word in quotes to avoid syntax errors
-    const ftsQuery = query
-      .split(/\s+/)
-      .filter(Boolean)
-      .map(w => `"${w.replace(/"/g, '""')}"`)
-      .join(" ");
+    // Escape query for FTS5: wrap each word in quotes, use OR for broad matching.
+    // BM25 ranking naturally scores multi-word matches higher than single-word matches.
+    // We filter by rank threshold after to remove low-quality single-word hits.
+    const words = query.split(/\s+/).filter(Boolean);
+    const quotedWords = words.map(w => `"${w.replace(/"/g, '""')}"`);
+    const ftsQuery = quotedWords.join(" OR ");
+    // Minimum rank threshold: pages matching only 1 common word rank ~-0.5 to -1.0,
+    // while multi-word matches rank -3.0 or better (more negative = better in BM25)
+    const MIN_RANK = -0.8; // Filter out very weak single-word matches
 
     if (!ftsQuery) return results;
 
     if (tables.includes("knowledge")) {
       const rows = this.db.query(`
         SELECT topic AS id, snippet(fts_knowledge, 2, '<b>', '</b>', '...', 32) AS snippet, rank
-        FROM fts_knowledge WHERE fts_knowledge MATCH $q
-        ORDER BY rank LIMIT $limit
+        FROM fts_knowledge WHERE fts_knowledge MATCH $q         ORDER BY rank LIMIT $limit
       `).all({ $q: ftsQuery, $limit: limit }) as Array<{ id: string; snippet: string; rank: number }>;
       results.push(...rows.map(r => ({ table: "knowledge" as const, ...r })));
     }
@@ -274,8 +276,7 @@ export class SearchIndex {
     if (tables.includes("sessions")) {
       const rows = this.db.query(`
         SELECT id, snippet(fts_sessions, 1, '<b>', '</b>', '...', 32) AS snippet, rank
-        FROM fts_sessions WHERE fts_sessions MATCH $q
-        ORDER BY rank LIMIT $limit
+        FROM fts_sessions WHERE fts_sessions MATCH $q         ORDER BY rank LIMIT $limit
       `).all({ $q: ftsQuery, $limit: limit }) as Array<{ id: string; snippet: string; rank: number }>;
       results.push(...rows.map(r => ({ table: "sessions" as const, ...r })));
     }
@@ -283,8 +284,7 @@ export class SearchIndex {
     if (tables.includes("transcripts")) {
       const rows = this.db.query(`
         SELECT session_id AS id, snippet(fts_transcripts, 2, '<b>', '</b>', '...', 32) AS snippet, rank
-        FROM fts_transcripts WHERE fts_transcripts MATCH $q
-        ORDER BY rank LIMIT $limit
+        FROM fts_transcripts WHERE fts_transcripts MATCH $q         ORDER BY rank LIMIT $limit
       `).all({ $q: ftsQuery, $limit: limit }) as Array<{ id: string; snippet: string; rank: number }>;
       results.push(...rows.map(r => ({ table: "transcripts" as const, ...r })));
     }
@@ -292,8 +292,7 @@ export class SearchIndex {
     if (tables.includes("notes")) {
       const rows = this.db.query(`
         SELECT id, snippet(fts_notes, 2, '<b>', '</b>', '...', 32) AS snippet, rank
-        FROM fts_notes WHERE fts_notes MATCH $q
-        ORDER BY rank LIMIT $limit
+        FROM fts_notes WHERE fts_notes MATCH $q         ORDER BY rank LIMIT $limit
       `).all({ $q: ftsQuery, $limit: limit }) as Array<{ id: string; snippet: string; rank: number }>;
       results.push(...rows.map(r => ({ table: "notes" as const, ...r })));
     }
@@ -301,8 +300,7 @@ export class SearchIndex {
     if (tables.includes("digests")) {
       const rows = this.db.query(`
         SELECT date AS id, snippet(fts_digests, 1, '<b>', '</b>', '...', 32) AS snippet, rank
-        FROM fts_digests WHERE fts_digests MATCH $q
-        ORDER BY rank LIMIT $limit
+        FROM fts_digests WHERE fts_digests MATCH $q         ORDER BY rank LIMIT $limit
       `).all({ $q: ftsQuery, $limit: limit }) as Array<{ id: string; snippet: string; rank: number }>;
       results.push(...rows.map(r => ({ table: "digests" as const, ...r })));
     }

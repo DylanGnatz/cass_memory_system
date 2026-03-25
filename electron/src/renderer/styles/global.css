@@ -421,6 +421,70 @@ body {
   border: 1px solid transparent;
 }
 
+/* Transcript items */
+.transcript-summary {
+  padding: 2px var(--sp-3);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.transcript-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--surface-4);
+  flex-shrink: 0;
+}
+
+.transcript-dot--active {
+  background: var(--confidence-verified);
+}
+
+.transcript-item--no-note .sidebar-item__name {
+  color: var(--text-secondary);
+}
+
+/* Transcript content view */
+.transcript-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.transcript-actions__message {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--accent);
+}
+
+.transcript-header {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.transcript-header__meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-top: var(--sp-2);
+  margin-bottom: var(--sp-4);
+}
+
+.transcript-load-more {
+  padding: var(--sp-4) 0;
+  text-align: center;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--sp-4);
+}
+
 .sidebar-item__delete {
   display: none;
   background: transparent;
@@ -731,6 +795,16 @@ body {
   margin-bottom: var(--sp-3);
   display: flex;
   gap: var(--sp-4);
+}
+
+.kp-section__source-link {
+  cursor: pointer;
+  transition: color var(--duration-fast);
+}
+
+.kp-section__source-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .kp-section__content {

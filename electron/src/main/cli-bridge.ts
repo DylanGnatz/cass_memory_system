@@ -75,6 +75,15 @@ async function runCli(args: string[]): Promise<CliResult> {
   })
 }
 
+export async function cliGenerateSessionNote(sessionId: string, transcriptPath: string): Promise<{ success: boolean; message: string }> {
+  try {
+    await runCli(['snapshot', '--session', transcriptPath])
+    return { success: true, message: `Session note generated for ${sessionId}` }
+  } catch (err: any) {
+    return { success: false, message: err.message || 'Failed to generate session note' }
+  }
+}
+
 export async function cliAddTopic(slug: string, name: string, description: string): Promise<void> {
   await runCli(['topic', 'add', slug, '--name', name, '--description', description])
 }

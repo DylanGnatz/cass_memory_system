@@ -8,8 +8,8 @@ Architecture plan: [v1_prototype_architecture.md](v1_prototype_architecture.md)
 
 ## Current Status
 
-**Phase:** 5 — Electron App (5a/5b/5c complete, C2+C4 deferred)
-**Last updated:** 2026-03-24
+**Phase:** 5 — Electron App (5a/5b/5c complete, C2+C4 deferred) + Pipeline Hardening
+**Last updated:** 2026-03-25
 
 ---
 
@@ -455,3 +455,117 @@ All build phases use mock LLM responses in tests. The prompts are structurally c
 **Electron app is a separate build** — does not affect bun test suite.
 **Build outputs:** main (31KB), preload (2.8KB), renderer (1.4MB), CSS (37KB).
 **Phase 5 status:** 5a/5b/5c functionally complete. C2 (Related Topics) and C4 (Packaging) deferred. Pending manual testing with real data.
+
+---
+
+## Pipeline Hardening (Post-Phase 5)
+
+### Knowledge Architecture Redesign
+**Date:** 2026-03-25
+**Files changed:**
+- `src/types.ts` — Added SubPageSchema, subpages[] to TopicSchema, sub_page to KnowledgePageAppendDeltaSchema and ReflectorCall2OutputSchema, .default([]) on bullets and topic_suggestions arrays, TopicSuggestionItemSchema for review queue
+- `src/knowledge-page.ts` — Full rewrite for directory model: topicDirPath(), subPagePath(), createTopicDirectory(), addSubPage(), listSubPages(). loadKnowledgePage/writeKnowledgePage accept optional subPage param. appendSectionToPage requires topic to exist (rejects undefined). addTopicSuggestion routes to review queue instead of auto-creating. listTopicsWithMetadata aggregates across sub-pages.
+- `src/knowledge-gen.ts` — Rewritten: gathers ALL relevant content ranked by score (FTS first, then notes), fills 80K char budget with per-item 40K cap, stop word filtering, FTS indexing after writing.
+- `src/reflect.ts` — formatTopicsForPrompt includes sub-pages with descriptions. Call 2 only targets existing topics (removed suggested topic merging). Null-safe access on bullets/topic_suggestions.
+- `src/llm.ts` — Prompt fixes: bullet kind enum values corrected (project_convention/stack_pattern/workflow_rule/anti_pattern), topic suggestion prompt rebalanced. Added configForStep() + PipelineStep type for per-step model overrides.
+- `src/curate.ts` — No code changes needed (appendSectionToPage already handles filtering).
+- `src/orchestrator.ts` — Removed early returns blocking Phase 3. Re-indexing supports directory model. Hoisted autoOutcome variable.
+- `src/session-notes.ts` — processed flag only reset on substantial new content (>500 chars). LLM input capped at 30K chars. Raw path note body capped at 30K chars.
+- `src/review-queue.ts` — compositeKey handles topic_suggestion and user_flag types. approveReviewItem returns { topicSlug? }.
+- `src/cost.ts` — Added claude-haiku-4-5-20251001 pricing.
+- `src/cm.ts` — Registered topic generate and add-subpage subcommands.
+- `src/commands/topic.ts` — Added generate and add-subpage subcommands.
+
+**Electron changes:**
+- `electron/src/main/cli-bridge.ts` — spawn→execFile with 10MB maxBuffer (fixes 65KB stdout truncation). Added cliGenerateTopicKnowledge.
+- `electron/src/main/file-ops.ts` — Topic deletion (removes from topics.json + deletes directory). approveReviewItem creates topic + fires background knowledge generation. addSubPage. User note indexing on create/save.
+- `electron/src/main/search.ts` — Opened in readwrite mode (was readonly). Added indexNote() for user note FTS.
+- `electron/src/main/settings.ts` — NEW: API key + budget management persisted to config.json.
+- `electron/src/main/file-reader.ts` — readTopics/readKnowledgePage handle directory model. readSubPages() added.
+- `electron/src/main/ipc-handlers.ts` — Added: delete-topic, generate-topic-knowledge, add-sub-page, settings IPC, budget IPC.
+- `electron/src/preload/index.ts` — Exposed all new IPC methods.
+- UI: icon-based sidebar tabs, resizable sidebar (DOM-direct during drag), star buttons, sub-page navigation pills, add topic/sub-page forms, topic delete button, settings page (API key + budget), search/reflection error messages surfaced.
+
+**Key design decisions:**
+- Topics are user-driven: system suggestions go to review queue, not auto-created
+- Knowledge pages only generated for approved topics via generateKnowledgePage (search-based, not re-reflection)
+- Per-step model config: Haiku for extractive tasks (diary, Call 1, session notes), Sonnet for generative (Call 2, knowledge gen). Side-by-side comparison showed identical quality, ~3x cost savings.
+- Raw transcript FTS indexing deliberately skipped: raw transcripts are noisy and partial indexing gives false confidence. Session notes are the search layer.
+- Session note backfill from old transcripts creates oversized notes (838KB). Future: installedAt timestamp to skip old transcripts, transcript browser for manual generation.
+
+**Gotchas encountered:**
+- CLI bridge stdout truncation at 65KB (pipe buffer limit) — fixed with execFile + 10MB maxBuffer
+- Haiku schema compliance: follows prompt text more literally than Sonnet. Prompt/schema enum mismatches that Sonnet tolerated caused Haiku validation failures.
+- processAllTranscripts defaults to maxSessions: 10 — only 8 of 118 transcripts got session notes
+- FTS index not rebuilt after directory model migration — had to manually re-index
+- Knowledge generation: generic search terms ("patterns", "architecture") match everything — added stop word filtering
+
+**Open questions:** None.
+
+---
+
+## Pipeline Hardening Validation
+
+**Test results:** 2461 pass, 46 fail (pre-existing), 3 skip — unchanged.
+**API cost:** $2.02 total for testing (73 API calls). With Haiku optimization, ongoing cost ~$0.03/session.
+**Knowledge quality verified:** GTFS topic generated 9 high-quality sections. Haiku vs Sonnet comparison on reflectorCall1 showed identical output (8 bullets, 0 topics, same categories).
+
+---
+
+## Session 2: Pipeline + Retrieval Overhaul
+
+### Knowledge Page Architecture: Single Document Model
+**Date:** 2026-03-25
+**Files changed:** `src/types.ts`, `src/llm.ts`, `src/reflect.ts`, `src/curate.ts`, `src/knowledge-page.ts`, `src/validate.ts`, `src/review-queue.ts`, `test/phase3-reflect.test.ts`
+**Key changes:**
+- Replaced `KnowledgePageAppendDelta` (section append) with `KnowledgePageUpdateDelta` (full page revision). Alias kept for backward compat.
+- Reflector Call 2 output changed from `knowledge_sections[]` to `page_updates[]` — each update is a full revised page body.
+- LLM is conservative: keeps both claims when unsure, flags contradictions for review queue.
+- `ContradictionItemSchema` + `ContradictionClaimSchema` in types.ts. Claims merge into existing items per topic+section.
+- `updatePageContent()` in knowledge-page.ts replaces page body, indexes into FTS after write.
+- Curator handles `knowledge_page_update` delta type, reports contradictions via `reportContradiction()`.
+
+### Session Note Improvements
+- Added `title` field to SessionNoteSchema + frontmatter. LLM generates 3-8 word title.
+- Date headers now include time: "March 25, 2026 — 14:30".
+- `user_edited` skip removed — notes always receive appended content.
+- `processed` flag only reset on substantial new content (>500 chars).
+- Map-reduce summarization for large transcripts (>60K chars): chunk → Haiku summarize each → Sonnet synthesize final note.
+
+### Transcript Browser
+- New sidebar tab (◎) listing all transcripts grouped by project.
+- Click any transcript to view raw content with chunked loading (500KB, Load More button).
+- "Generate Session Note" button for unprocessed transcripts.
+- "View Session Note" button for processed ones.
+- Backend: `readTranscripts()`, `readTranscriptChunk()` in file-reader.ts, `cliGenerateSessionNote()` in cli-bridge.ts.
+
+### No-Backfill for Old Transcripts
+- `installedAt` timestamp in state.json, set on first run.
+- `scanForModifiedTranscripts` skips transcripts with mtime before installedAt.
+- Old transcripts can be processed manually via transcript browser.
+
+### cm_context Tiered Retrieval Rewrite
+- **Tier 1:** Full knowledge page content (auto-included for high-relevance) + knowledge page summaries (for lower relevance) + matching user notes + unprocessed session note summaries.
+- **Tier 2:** Processed session note summaries (if Tier 1 < 2K tokens).
+- **On-demand:** Agent calls `cm_detail` for full session note bodies or knowledge summaries.
+- Knowledge page matching: keyword (word-boundary) + semantic + body content matching. Body matching against page content catches queries like "line map" that don't appear in topic name "GTFS".
+- Session summary relevance filtering: stop words excluded, keyword match against title+abstract+topics.
+- FTS search uses OR semantics for broader recall.
+- `_hint` in response tells agent how to use `cm_detail` for follow-up reads.
+- CLAUDE.md updated: agents instructed to call `cm_context` before starting any task.
+
+### Other Fixes
+- Source provenance links: knowledge page section sources clickable → navigates to session note.
+- External references: prompts updated to preserve URLs in session notes and knowledge pages.
+- Session note LLM input capped at 30K chars. Raw path body capped at 30K chars.
+- `formatDate()` handles empty/invalid dates gracefully.
+- Topic deletion: removes from topics.json + deletes knowledge directory.
+- Add topic/sub-page forms in Electron UI.
+- Sidebar icons, resizable sidebar (DOM-direct during drag), star buttons on all content types.
+
+### E2E Verification
+Tested cm_context → cm_detail flow with multiple query types:
+- "add collision detection to line map" → GTFS/_index auto-included (8K chars, rel:0.6), session note about V2 build identified and readable via cm_detail.
+- "reflection pipeline" → LLM Pipeline Architecture auto-included.
+- "PostgreSQL RLS" (no knowledge) → graceful degradation with session summaries as fallback.
+- Full agent simulation: cm_context → picks relevant items → cm_detail → has full architectural context to proceed.

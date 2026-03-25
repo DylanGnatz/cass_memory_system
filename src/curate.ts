@@ -11,6 +11,7 @@ import {
 } from "./types.js";
 import {
   appendSectionToPage,
+  updatePageContent,
   appendToDigest,
   addTopicSuggestion,
   loadTopics,
@@ -767,22 +768,44 @@ export async function curateKnowledge(
 
   for (const delta of deltas) {
     switch (delta.type) {
-      case "knowledge_page_append": {
-        // Find the topic for page creation context
+      case "knowledge_page_update": {
         const topic = existingTopics.find(t => t.slug === delta.topic_slug);
+        if (!topic) {
+          result.sectionsSkipped++;
+          logDecision(decisionLog, "add", "skipped", `Topic "${delta.topic_slug}" not in topics.json — skipping`, {
+            content: `${delta.topic_slug}/${delta.sub_page}`,
+          });
+          break;
+        }
 
-        const { written, reason } = await appendSectionToPage(delta, topic, config);
+        const { written, reason } = await updatePageContent(delta, topic, config);
         if (written) {
           result.sectionsWritten++;
-          logDecision(decisionLog, "add", "accepted", `Knowledge section appended: ${reason}`, {
-            content: `${delta.topic_slug}/${delta.section_title}`,
-            details: { sectionId: delta.section_id, confidence: delta.confidence },
+          logDecision(decisionLog, "add", "accepted", `Knowledge page updated: ${reason}`, {
+            content: `${delta.topic_slug}/${delta.sub_page}`,
+            details: { contradictions: delta.contradictions?.length || 0 },
           });
+
+          // Report any contradictions the LLM flagged
+          if (delta.contradictions && delta.contradictions.length > 0) {
+            const { reportContradiction } = await import("./review-queue.js");
+            for (const c of delta.contradictions) {
+              await reportContradiction(
+                delta.topic_slug,
+                delta.sub_page,
+                c.description,
+                [
+                  { claim: c.existing_claim, source: "existing", date: delta.updated_date },
+                  { claim: c.new_claim, source: delta.source_session, date: delta.updated_date },
+                ],
+                config
+              );
+            }
+          }
         } else {
           result.sectionsSkipped++;
-          logDecision(decisionLog, "add", "skipped", `Knowledge section skipped: ${reason}`, {
-            content: `${delta.topic_slug}/${delta.section_title}`,
-            details: { sectionId: delta.section_id },
+          logDecision(decisionLog, "add", "skipped", `Knowledge page update skipped: ${reason}`, {
+            content: `${delta.topic_slug}/${delta.sub_page}`,
           });
         }
         break;

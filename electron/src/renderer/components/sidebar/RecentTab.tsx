@@ -49,7 +49,7 @@ export default function RecentTab(): React.ReactElement {
               onClick={() => navigate({ type: 'session', id: s.id })}
             >
               <div className="sidebar-item__name">
-                {s.abstract || s.id}
+                {s.title || s.abstract?.slice(0, 50) || s.id}
               </div>
               <div className="sidebar-item__meta">
                 <span>{formatDate(s.last_updated || s.created)}</span>

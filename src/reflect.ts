@@ -488,41 +488,23 @@ export async function reflectOnSessionTwoCalls(
       io
     );
 
-    // Convert Call 2 knowledge sections → KnowledgePageAppendDelta
-    for (const section of call2Output.knowledge_sections) {
-      // Generate stable section ID
-      const sectionId = `sec-${hashContent(section.topic_slug + section.section_title + sessionId).slice(0, 8)}`;
-
-      // Resolve related_bullet_indices to actual bullet IDs
-      const relatedBullets: string[] = [];
-      if (section.related_bullet_indices && call1Output) {
-        for (const idx of section.related_bullet_indices) {
-          if (idx >= 0 && idx < playbookDeltas.length) {
-            const delta = playbookDeltas[idx];
-            if (delta.type === "add" && delta.bullet) {
-              // The bullet ID will be assigned by the Curator, so use a provisional reference
-              relatedBullets.push(`pending-${idx}`);
-            }
-          }
-        }
-      }
-
+    // Convert Call 2 page updates → KnowledgePageUpdateDelta
+    const pageUpdates = call2Output.page_updates || [];
+    for (const update of pageUpdates) {
       knowledgeDeltas.push({
-        type: "knowledge_page_append" as const,
-        topic_slug: section.topic_slug,
-        section_id: sectionId,
-        section_title: section.section_title,
-        content: section.content,
-        confidence: section.confidence,
+        type: "knowledge_page_update" as const,
+        topic_slug: update.topic_slug,
+        sub_page: update.sub_page || "_index",
+        revised_content: update.revised_content,
         source_session: sessionId,
-        added_date: now().split("T")[0], // YYYY-MM-DD
-        related_bullets: relatedBullets,
+        updated_date: now().split("T")[0],
+        contradictions: update.contradictions || [],
       });
     }
 
     // Convert Call 2 digest → DigestUpdateDelta
     if (call2Output.digest_content && call2Output.digest_content.trim().length > 0) {
-      const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+      const today = new Date().toISOString().split("T")[0];
       knowledgeDeltas.push({
         type: "digest_update" as const,
         date: today,
@@ -535,11 +517,12 @@ export async function reflectOnSessionTwoCalls(
       timestamp: now(),
       phase: "add",
       action: "accepted",
-      reason: `Call 2: ${call2Output.knowledge_sections.length} knowledge sections, digest ${call2Output.digest_content ? "generated" : "empty"}`,
+      reason: `Call 2: ${pageUpdates.length} page updates, digest ${call2Output.digest_content ? "generated" : "empty"}`,
       details: {
-        sectionsProposed: call2Output.knowledge_sections.length,
+        pagesUpdated: pageUpdates.length,
         digestGenerated: !!call2Output.digest_content,
-        topicsCovered: [...new Set(call2Output.knowledge_sections.map(s => s.topic_slug))],
+        topicsCovered: [...new Set(pageUpdates.map(u => u.topic_slug))],
+        contradictionsFlagged: pageUpdates.reduce((sum, u) => sum + (u.contradictions?.length || 0), 0),
       },
     });
   } catch (err) {

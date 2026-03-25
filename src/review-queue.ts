@@ -61,6 +61,9 @@ function compositeKey(item: ReviewQueueItem): string {
   if (item.type === "user_flag") {
     return `${base}::${item.target_path}::${item.target_section ?? ""}`;
   }
+  if (item.type === "contradiction") {
+    return `${base}::${item.target_section}`;
+  }
   return base;
 }
 
@@ -80,6 +83,20 @@ export async function appendReviewItems(
   for (const item of items) {
     const key = compositeKey(item);
     if (existingKeys.has(key)) {
+      // For contradictions, merge new claims into the existing item
+      if (item.type === "contradiction") {
+        const existing = queue.items.find(i => i.type === "contradiction" && compositeKey(i) === key);
+        if (existing && existing.type === "contradiction") {
+          const existingClaims = new Set(existing.data.claims.map(c => c.claim));
+          for (const claim of item.data.claims) {
+            if (!existingClaims.has(claim.claim)) {
+              existing.data.claims.push(claim);
+              added++;
+            }
+          }
+          continue;
+        }
+      }
       skipped++;
       continue;
     }
@@ -154,4 +171,65 @@ export async function flagContent(
 
   const result = await appendReviewItems([item], config);
   return { added: result.added > 0 };
+}
+
+/**
+ * Report a contradiction. Creates or merges into a contradiction review item.
+ * Multiple claims accumulate under a single item per topic+section.
+ */
+export async function reportContradiction(
+  topicSlug: string,
+  sectionTitle: string,
+  description: string,
+  claims: Array<{ claim: string; source: string; date: string; confidence?: string; section_id?: string }>,
+  config: Config
+): Promise<void> {
+  const id = `rq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const item: ReviewQueueItem = {
+    id,
+    type: "contradiction",
+    status: "pending",
+    created: new Date().toISOString(),
+    target_topic: topicSlug,
+    target_section: sectionTitle,
+    data: {
+      description,
+      claims: claims.map(c => ({
+        claim: c.claim,
+        source: c.source,
+        date: c.date,
+        confidence: c.confidence as any,
+        section_id: c.section_id,
+      })),
+    },
+  };
+
+  await appendReviewItems([item], config);
+  log(`Reported contradiction on ${topicSlug}/${sectionTitle}: ${claims.length} claims`);
+}
+
+/**
+ * Resolve a contradiction by keeping specified claims and removing others.
+ * Updates the knowledge page section with the kept claim(s).
+ */
+export async function resolveContradiction(
+  id: string,
+  keptClaimIndices: number[],
+  customClaim: string | null,
+  config: Config
+): Promise<{ resolved: boolean }> {
+  const queue = await loadReviewQueue(config);
+  const item = queue.items.find(i => i.id === id);
+  if (!item || item.type !== "contradiction") return { resolved: false };
+
+  (item as any).status = "approved";
+  // Store the resolution for audit
+  (item as any).resolution = {
+    keptClaims: keptClaimIndices,
+    customClaim,
+    resolvedAt: new Date().toISOString(),
+  };
+
+  await saveReviewQueue(queue, config);
+  return { resolved: true };
 }

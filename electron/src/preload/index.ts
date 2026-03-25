@@ -74,6 +74,14 @@ const electronAPI = {
   claudeReset: (): Promise<void> =>
     ipcRenderer.invoke('claude-reset'),
 
+  // Transcripts
+  getTranscripts: (): Promise<any[]> =>
+    ipcRenderer.invoke('get-transcripts'),
+  getTranscriptChunk: (filePath: string, offset?: number): Promise<{ content: string; bytesRead: number; totalSize: number; hasMore: boolean }> =>
+    ipcRenderer.invoke('get-transcript-chunk', filePath, offset),
+  generateSessionNote: (sessionId: string, transcriptPath: string): Promise<any> =>
+    ipcRenderer.invoke('generate-session-note', sessionId, transcriptPath),
+
   // Settings
   getApiKey: (): Promise<string | null> =>
     ipcRenderer.invoke('get-api-key'),

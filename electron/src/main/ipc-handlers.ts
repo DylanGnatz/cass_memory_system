@@ -6,6 +6,8 @@ import {
   readTopics,
   readKnowledgePage,
   readSubPages,
+  readTranscripts,
+  readTranscriptChunk,
   readSessionNotes,
   readSessionNote,
   readDigests,
@@ -18,7 +20,7 @@ import {
   saveFile
 } from './file-reader'
 import { search } from './search'
-import { cliAddTopic, cliRemoveTopic, cliRunReflection, cliGenerateTopicKnowledge } from './cli-bridge'
+import { cliAddTopic, cliRemoveTopic, cliRunReflection, cliGenerateTopicKnowledge, cliGenerateSessionNote } from './cli-bridge'
 import {
   approveReviewItem,
   dismissReviewItem,
@@ -82,6 +84,19 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('get-user-note', async (_event, id: string) => {
     return readUserNote(id)
+  })
+
+  // ── Transcripts ────────────────────────────────────────────────
+  ipcMain.handle('get-transcripts', async () => {
+    return readTranscripts()
+  })
+
+  ipcMain.handle('get-transcript-chunk', async (_event, filePath: string, offset?: number) => {
+    return readTranscriptChunk(filePath, offset || 0)
+  })
+
+  ipcMain.handle('generate-session-note', async (_event, sessionId: string, transcriptPath: string) => {
+    return cliGenerateSessionNote(sessionId, transcriptPath)
   })
 
   // ── Search ──────────────────────────────────────────────────────

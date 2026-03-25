@@ -37,7 +37,7 @@ program.command("<name>")
 ### Core Enums (lines 7–53)
 - `HarmfulReasonEnum`, `SessionStatusEnum` ("success" | "failure" | "mixed")
 - `BulletScopeEnum` ("global" | "workspace" | "language" | "framework" | "task")
-- `BulletTypeEnum`, `BulletKindEnum`, `BulletSourceEnum`, `BulletStateEnum`
+- `BulletTypeEnum` ("rule" | "anti-pattern"), `BulletKindEnum` ("project_convention" | "stack_pattern" | "workflow_rule" | "anti_pattern"), `BulletSourceEnum`, `BulletStateEnum`
 - `BulletMaturityEnum` ("candidate" | "established" | "proven" | "deprecated")
 - `LLMProviderEnum` ("openai" | "anthropic" | "google" | "ollama")
 
@@ -60,11 +60,13 @@ Key defaults (post-Phase 1):
 - `budget`: dailyLimit=**0.50**, monthlyLimit=**10.00** (changed from 0.10/2.00 in Phase 1)
 - New Phase 1 path fields (lines 416–422): `sessionNotesDir`, `knowledgeDir`, `digestsDir`, `notesDir`, `searchDbPath`, `stateJsonPath`, `topicsJsonPath`
 - New Phase 1 tuning fields (lines 424–428): `periodicJobIntervalHours` (4), `knowledgePageBloatThreshold` (5000), `staleTopicIgnoreDays` (30), `transcriptRetentionDays` (30)
+- `pipelineModels` (post-Phase 5): per-step model overrides. Defaults: sessionNoteCreate/Extend/diaryFromNote/reflectorCall1 → `claude-haiku-4-5-20251001`, reflectorCall2/knowledgeGen → "" (uses config.model, i.e. Sonnet)
 
 ### Phase 1 Knowledge System Types (lines 906–1045)
 - **`ConfidenceTierEnum`** — "verified" | "inferred" | "uncertain"
 - **`TopicSourceEnum`** — "user" | "system"
-- **`TopicSchema`** — slug, name, description, source, created
+- **`SubPageSchema`** — slug, name, description
+- **`TopicSchema`** — slug, name, description, source, created, subpages: SubPage[] (default [])
 - **`TopicsFileSchema`** — { topics: Topic[] }
 - **`SessionNoteSchema`** — id, source_session, last_offset, created, last_updated, abstract, topics_touched, processed, user_edited
 - **`KnowledgePageSchema`** — topic, description, source, created, last_updated
@@ -82,7 +84,7 @@ Key defaults (post-Phase 1):
 - **`TopicExcerptSchema`** — topic, slug, sections[{title, preview}]
 - **`RecentSessionSchema`** — id, date, abstract, note_text
 - **`RelatedTopicSchema`** — slug, name, description, similarity
-- **`ReviewQueueItemSchema`** — Discriminated union on `type`: cold_start_suggestion, bloated_page, stale_topic
+- **`ReviewQueueItemSchema`** — Discriminated union on `type`: cold_start_suggestion, bloated_page, stale_topic, user_flag, topic_suggestion
 - **`ReviewQueueSchema`** — { schema_version: z.literal(1), items: ReviewQueueItem[] }
 
 ### Delta Type Design
@@ -152,11 +154,17 @@ Core module for the session note lifecycle: discovering transcripts, reading fro
 
 ### Content Generation Paths
 `processTranscript()` supports three paths via `GenerateNoteOptions`:
-1. **Agent-provided** (`agentContent` set): Claude Code generates the note during the session via `cm_snapshot` MCP tool. No API cost. Highest quality. Primary path.
-2. **LLM-generated** (default): Reads raw transcript, makes API call via llm.ts (Sonnet). Used by PreCompact hook safety net and periodic job. Requires API key.
-3. **Raw** (`raw: true`): Extracts metadata from transcript without LLM. Last-resort fallback, kept in code but not used in normal flow.
+1. **Agent-provided** (`agentContent` set): Claude Code generates the note during the session via `cm_snapshot` MCP tool. No API cost. Highest quality. Primary path. Title derived from first sentence of abstract.
+2. **LLM-generated** (default): Reads raw transcript, makes API call via llm.ts (Haiku). For large transcripts (>60K chars), uses map-reduce: chunk → Haiku summarize each → Sonnet synthesize. LLM generates title.
+3. **Raw** (`raw: true`): Extracts metadata from transcript without LLM. Last-resort fallback. Body capped at 30K chars.
 
-All paths share file writing, state tracking, offset management, and FTS indexing. Offset-based dedup: if agent-provided path already captured up to byte X, the LLM fallback finds no new content and exits as a no-op.
+All paths share file writing, state tracking, offset management, and FTS indexing. Offset-based dedup. `user_edited` no longer blocks appending — system only appends, never modifies existing content. `processed` flag only reset on substantial new content (>500 chars).
+
+### Session Note Schema
+Frontmatter includes: id, **title** (3-8 words, editable), source_session, last_offset, created, last_updated, abstract, topics_touched, processed, user_edited.
+
+### No-Backfill
+`installedAt` timestamp in state.json. `scanForModifiedTranscripts` skips transcripts with mtime before installedAt.
 
 ### Custom Transcript Formatter (`formatTranscriptChunk`)
 Replaces upstream `formatRawSession` (diary.ts) for session note generation. Key differences:
@@ -303,7 +311,7 @@ types, playbook, tracking, cass, diary, reflect, validate, llm (type), curate, u
 | `src/lock.ts` | 273 | File-level locking for concurrent write safety |
 | `src/output.ts` | 224 | Terminal output formatting |
 | `src/progress.ts` | 268 | Progress reporting for periodic job |
-| `src/llm.ts` | ~890 | Multi-provider LLM abstraction (Vercel AI SDK). Phase 2: added `sessionNoteCreate`/`sessionNoteAppend` prompts + `generateSessionNoteContent()`/`extendSessionNoteContent()` |
+| `src/llm.ts` | ~890 | Multi-provider LLM abstraction (Vercel AI SDK). Phase 2: added session note prompts. Post-Phase 5: added `configForStep(config, step)` for per-step Haiku/Sonnet routing, fixed prompt enum values. |
 | `src/cost.ts` | 221 | Budget tracking with daily/monthly limits |
 | `src/playbook.ts` | 702 | Playbook CRUD, YAML load/save/merge |
 | `src/gap-analysis.ts` | 298 | Rule archetype categorization, coverage gaps |
@@ -324,7 +332,7 @@ types, playbook, tracking, cass, diary, reflect, validate, llm (type), curate, u
 | `src/outcome.ts` | 3 | Knowledge page section tracking |
 | `src/tracking.ts` | 3 | New event types |
 | `src/commands/serve.ts` | 2+4 | Phase 2: `cm_snapshot` tool. Phase 4: `cm_detail` (path-safe file reading, section extraction), `cm_search` (FTS + playbook search, scope filtering), `memory_search` deprecated alias, 5 new MCP resources (cm://topics, cm://knowledge/{topic}, cm://digest/{date}, cm://today, cm://status). Updated cm_context/cm_feedback descriptions. |
-| `src/commands/context.ts` | 4 | Replaced cass binary with SQLite FTS + semantic ranking. Added topic excerpts, related topics, unprocessed sessions, deep dives, lastReflectionRun. Renamed historySnippets → searchResults. |
+| `src/commands/context.ts` | 4+post | Tiered retrieval: full knowledge pages (body-matched, auto-include at rel≥0.4) + summaries + user notes + relevance-filtered session summaries. Word-boundary keyword matching + semantic + body content matching. FTS OR semantics. Stop word filtering for session relevance. |
 | `src/commands/reflect.ts` | 4 | Added `--full` flag → invokes `runPeriodicJob()` instead of `orchestrateReflection()` |
 | `src/commands/mcp-stdio.ts` | 4 | Wired `maybeRunPeriodicJobBackground()` at server start |
 
@@ -383,21 +391,22 @@ All internal imports use `.js` extension (ESM): `import { foo } from "./bar.js"`
 
 ---
 
-## knowledge-page.ts — Knowledge Page I/O (NEW, Phase 3)
+## knowledge-page.ts — Knowledge Page I/O (NEW, Phase 3, rewritten post-Phase 5)
 
-### Structure
-- **parseKnowledgePage():** Parses markdown with YAML frontmatter + HTML comment metadata per section. 3-line lookahead for `<!-- id: ... -->` comments after `## Heading`.
-- **serializeKnowledgePage():** Roundtrip-safe serialization back to markdown.
-- **loadKnowledgePage() / writeKnowledgePage():** File I/O with `withLock()` + `atomicWrite()`.
-- **appendSectionToPage():** Appends a section to an existing page or creates a new one. Deduplicates by source session ID.
-- **loadTopics() / saveTopics() / addTopicSuggestion():** CRUD for `topics.json`.
-- **appendToDigest():** Appends to daily digest files in `~/.memory-system/digests/`.
+### Knowledge Page Model
+**Current model (post-Phase 5):** Single cohesive markdown document per sub-page. LLM revises the full page body on each update. No section-level HTML comment metadata.
 
-### Metadata Comment Format
-```
-<!-- id: sec-xyz | confidence: verified | source: session-id | added: 2026-03-23 | related_bullets: b-123 -->
-```
-Parser handles: blank lines between heading and comment (3-line lookahead), missing metadata (defaults to `id: ""`, `confidence: "uncertain"`), multiple `related_bullets` (comma-separated).
+**Directory model:** Each topic is a directory `knowledge/{slug}/` with sub-pages `{sub-page}.md`. `_index.md` is the main page.
+
+### Key Exports
+- **parseKnowledgePage() / serializeKnowledgePage():** Still work for backward compat with old section-based pages.
+- **loadKnowledgePage(slug, config, subPage?) / writeKnowledgePage():** Directory-aware I/O.
+- **updatePageContent(delta, topic, config):** Primary write path — replaces page body with revised content, indexes into FTS.
+- **createTopicDirectory(topic, config):** Creates `knowledge/{slug}/_index.md`.
+- **addSubPage(topicSlug, subPageSlug, name, description, config):** Adds sub-page definition + creates file.
+- **listSubPages(slug, config):** Lists .md files in topic directory.
+- **addTopic() / removeTopic() / listTopicsWithMetadata():** Topic CRUD.
+- **addTopicSuggestion():** Routes to review queue (not auto-create).
 
 ### Phase 4 Additions
 - **addTopic(slug, name, description, source, config):** Writes to topics.json via withLock + atomicWrite. Returns `{added: true}` or `{added: false, reason}` (doesn't throw for duplicates).

@@ -11,6 +11,7 @@ import DigestView from './components/content/DigestView'
 import UserNote from './components/content/UserNote'
 import ReviewQueue from './components/content/ReviewQueue'
 import Settings from './components/content/Settings'
+import TranscriptView from './components/content/TranscriptView'
 import InvalidateDialog from './components/actions/InvalidateDialog'
 import FlagDialog from './components/actions/FlagDialog'
 import ClaudeDialog from './components/claude/ClaudeDialog'
@@ -29,6 +30,8 @@ function ContentArea(): React.ReactElement {
       return <UserNote id={currentView.id} />
     case 'review-queue':
       return <ReviewQueue />
+    case 'transcript':
+      return <TranscriptView sessionId={currentView.sessionId} filePath={currentView.filePath} hasSessionNote={currentView.hasSessionNote} />
     case 'settings':
       return <Settings />
     default:

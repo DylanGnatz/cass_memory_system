@@ -79,8 +79,8 @@ function makeMockIO(options?: {
               content: `Test bullet ${i + 1}: Always validate HMAC signatures`,
               scope: "global",
               category: "security",
-              type: "pattern",
-              kind: "learned",
+              type: "rule",
+              kind: "stack_pattern",
               reasoning: "Security best practice discovered during session",
             })),
             topic_suggestions: Array.from({ length: opts.call1Topics }, (_, i) => ({
@@ -96,12 +96,11 @@ function makeMockIO(options?: {
       // Call 2: generative/narrative
       return {
         object: {
-          knowledge_sections: Array.from({ length: opts.call2Sections }, (_, i) => ({
+          page_updates: Array.from({ length: opts.call2Sections }, (_, i) => ({
             topic_slug: "billing-service",
-            section_title: `Webhook Configuration ${i + 1}`,
-            content: "The billing service exposes webhooks at /api/v2/hooks/billing.",
-            confidence: "verified",
-            related_bullet_indices: [0],
+            sub_page: "_index",
+            revised_content: `# Webhook Configuration ${i + 1}\n\nThe billing service exposes webhooks at /api/v2/hooks/billing.`,
+            contradictions: [],
           })),
           digest_content: opts.call2Digest,
         },
@@ -154,13 +153,13 @@ describe("reflectOnSessionTwoCalls", () => {
       "", "test-001", config, io
     );
 
-    const knowledgeAppends = result.knowledgeDeltas.filter(d => d.type === "knowledge_page_append");
-    expect(knowledgeAppends.length).toBe(2);
-    for (const delta of knowledgeAppends) {
-      if (delta.type === "knowledge_page_append") {
+    const pageUpdates = result.knowledgeDeltas.filter(d => d.type === "knowledge_page_update");
+    expect(pageUpdates.length).toBe(2);
+    for (const delta of pageUpdates) {
+      if (delta.type === "knowledge_page_update") {
         expect(delta.topic_slug).toBe("billing-service");
         expect(delta.source_session).toBe("test-001");
-        expect(delta.section_id).toMatch(/^sec-/);
+        expect(delta.revised_content).toBeTruthy();
       }
     }
   });

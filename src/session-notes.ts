@@ -19,7 +19,7 @@ import { z } from "zod";
 import type { Config, ProcessingState, SessionProcessingState } from "./types.js";
 import { ProcessingStateSchema } from "./types.js";
 // formatRawSession from diary.ts no longer used — replaced by formatTranscriptChunk
-import { generateSessionNoteContent, extendSessionNoteContent } from "./llm.js";
+import { generateSessionNoteContent, extendSessionNoteContent, generateObjectSafe, configForStep } from "./llm.js";
 import type { LLMIO } from "./llm.js";
 import {
   expandPath,
@@ -48,6 +48,7 @@ export interface ParsedSessionNote {
 
 export interface SessionNoteFrontmatter {
   id: string;
+  title: string;
   source_session: string;
   last_offset: number;
   created: string;
@@ -69,9 +70,10 @@ export interface TranscriptScanResult {
 
 /** LLM output schema for creating a new session note. */
 export const SessionNoteCreateOutputSchema = z.object({
+  title: z.string().describe("Short display name for the session (3-8 words, e.g. 'Fix billing webhook HMAC validation', 'Phase 3 reflection pipeline build')"),
   abstract: z.string().describe("1-2 sentence summary of the full session"),
   topics_touched: z.array(z.string()).describe("Topic slugs covered in this session (kebab-case, e.g. 'billing-service', 'auth-setup')"),
-  content: z.string().describe("The session note body in markdown. Use ## date headers, ### time/topic headers. Include specific facts, decisions, outcomes, error messages, file paths."),
+  content: z.string().describe("The session note body in markdown. Use ## date — time headers (e.g. '## March 25, 2026 — 14:30'), ### topic headers. Include specific facts, decisions, outcomes, error messages, file paths."),
 });
 
 export type SessionNoteCreateOutput = z.infer<typeof SessionNoteCreateOutputSchema>;
@@ -80,7 +82,7 @@ export type SessionNoteCreateOutput = z.infer<typeof SessionNoteCreateOutputSche
 export const SessionNoteAppendOutputSchema = z.object({
   abstract: z.string().describe("Updated 1-2 sentence summary covering the FULL note including new content"),
   topics_touched: z.array(z.string()).describe("Updated list of all topic slugs, including any new topics from the appended content"),
-  new_content: z.string().describe("ONLY the new section(s) to append. Start with a context resumption sentence. Add a date header if the day changed. Do NOT repeat existing content."),
+  new_content: z.string().describe("ONLY the new section(s) to append. Start with a context resumption sentence. Add a date — time header (e.g. '## March 25, 2026 — 14:30') if the day or time period changed. Do NOT repeat existing content."),
 });
 
 export type SessionNoteAppendOutput = z.infer<typeof SessionNoteAppendOutputSchema>;
@@ -153,11 +155,22 @@ export async function discoverTranscripts(): Promise<string[]> {
  * Scan for transcripts with new content since last processed offset.
  */
 export async function scanForModifiedTranscripts(
-  config: Config
+  config: Config,
+  options?: { includeOld?: boolean }
 ): Promise<TranscriptScanResult[]> {
   const state = await loadProcessingState(config);
   const transcripts = await discoverTranscripts();
   const results: TranscriptScanResult[] = [];
+
+  // On first run, record installedAt timestamp. Transcripts created before
+  // this date are "old" and won't get automatic session note generation
+  // (user can manually trigger via transcript browser).
+  if (!state.installedAt) {
+    state.installedAt = new Date().toISOString();
+    await saveProcessingState(state, config);
+    log(`First run detected. Set installedAt: ${state.installedAt}`);
+  }
+  const installedAt = new Date(state.installedAt).getTime();
 
   for (const transcriptPath of transcripts) {
     try {
@@ -168,18 +181,38 @@ export async function scanForModifiedTranscripts(
       const lastOffset = sessionState?.last_offset ?? 0;
 
       if (currentSize > lastOffset) {
+        const isNew = lastOffset === 0;
+
+        // Skip old transcripts (created before installation) unless explicitly requested.
+        // This prevents expensive backfill of 100+ old transcripts on first run.
+        // Old transcripts can be processed manually via the transcript browser.
+        if (isNew && !options?.includeOld) {
+          const transcriptMtime = stat.mtimeMs;
+          if (transcriptMtime < installedAt) {
+            // Record offset so we don't re-scan, but don't create a session note
+            state.sessions[sessionId] = {
+              last_offset: currentSize,
+              last_processed: new Date().toISOString(),
+            };
+            continue;
+          }
+        }
+
         results.push({
           sessionId,
           transcriptPath,
           currentSize,
           lastOffset,
-          isNew: lastOffset === 0,
+          isNew,
         });
       }
     } catch {
       // File disappeared between discovery and stat — skip
     }
   }
+
+  // Save state with any skipped old transcripts recorded
+  await saveProcessingState(state, config);
 
   return results;
 }
@@ -463,6 +496,7 @@ export function parseSessionNote(raw: string): ParsedSessionNote {
   return {
     frontmatter: {
       id: fm.id || "",
+      title: fm.title || "",
       source_session: fm.source_session || "",
       last_offset: fm.last_offset || 0,
       created: fm.created || "",
@@ -484,6 +518,7 @@ export function serializeSessionNote(frontmatter: SessionNoteFrontmatter, body: 
   const topicsStr = JSON.stringify(frontmatter.topics_touched);
   return `---
 id: ${frontmatter.id}
+title: "${(frontmatter.title || "").replace(/"/g, '\\"')}"
 source_session: ${frontmatter.source_session}
 last_offset: ${frontmatter.last_offset}
 created: ${frontmatter.created}
@@ -630,6 +665,122 @@ export interface GenerateNoteOptions {
  *   2. LLM-generated (default): Reads raw transcript and makes a separate API call.
  *      Used by the periodic job. Requires API key or Ollama.
  */
+
+// ============================================================================
+// MAP-REDUCE SUMMARIZATION FOR LARGE TRANSCRIPTS
+// ============================================================================
+
+const ChunkSummarySchema = z.object({
+  summary: z.string().describe("Concise summary of this transcript chunk (2-5 sentences). Focus on specific facts, decisions, outcomes, file paths, error messages."),
+  topics: z.array(z.string()).describe("Topic slugs mentioned in this chunk (kebab-case)"),
+});
+
+const CHUNK_SUMMARY_PROMPT = `Summarize this portion of a coding session transcript. Extract specific facts, decisions, outcomes, file paths, error messages, and external URLs. Be concise but preserve all important details.
+
+<transcript_chunk>
+{chunk}
+</transcript_chunk>
+
+Respond with a summary and topic slugs.`;
+
+const REDUCE_PROMPT = `You are combining chunk summaries from a long coding session into a single coherent session note.
+
+<chunk_summaries>
+{summaries}
+</chunk_summaries>
+
+<transcript_path>
+{transcriptPath}
+</transcript_path>
+
+Write a complete session note that synthesizes all chunks. Use ## date — time headers. Include specific facts, decisions, outcomes, error messages, file paths, and external URLs from across the entire session. Deduplicate — if the same fact appears in multiple chunks, write it once.
+
+Respond with JSON:
+{
+  "title": "Short display name (3-8 words)",
+  "abstract": "1-2 sentence summary of the full session",
+  "topics_touched": ["topic-slug-1", "topic-slug-2"],
+  "content": "The markdown body of the session note"
+}`;
+
+/**
+ * Map-reduce summarization for large transcripts.
+ * Splits the formatted transcript into chunks, summarizes each with Haiku,
+ * then combines summaries into a final session note with Sonnet.
+ *
+ * Only used when formattedChunk exceeds MAX_LLM_CHUNK_CHARS.
+ * Small transcripts use the single-call path in generateSessionNoteContent.
+ */
+async function summarizeLargeTranscript(
+  formattedChunk: string,
+  transcriptPath: string,
+  config: Config,
+): Promise<SessionNoteCreateOutput> {
+  const CHUNK_SIZE = 25_000; // ~6K tokens per chunk
+  const chunks: string[] = [];
+
+  // Split into chunks at paragraph boundaries
+  let pos = 0;
+  while (pos < formattedChunk.length) {
+    let end = Math.min(pos + CHUNK_SIZE, formattedChunk.length);
+    // Try to break at a double newline for cleaner boundaries
+    if (end < formattedChunk.length) {
+      const searchStart = Math.max(end - 2000, pos);
+      const region = formattedChunk.slice(searchStart, end);
+      const lastBreak = region.lastIndexOf('\n\n');
+      if (lastBreak > 0) end = searchStart + lastBreak;
+    }
+    chunks.push(formattedChunk.slice(pos, end));
+    pos = end;
+  }
+
+  log(`Map-reduce: splitting ${Math.round(formattedChunk.length / 1000)}K chars into ${chunks.length} chunks`);
+
+  // MAP: summarize each chunk with Haiku
+  const haikuConfig = configForStep(config, "sessionNoteCreate"); // Uses Haiku
+  const chunkSummaries: string[] = [];
+  const allTopics: string[] = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    try {
+      const prompt = CHUNK_SUMMARY_PROMPT.replace("{chunk}", chunks[i]);
+      const result = await generateObjectSafe(ChunkSummarySchema, prompt, haikuConfig);
+      chunkSummaries.push(`[Chunk ${i + 1}/${chunks.length}]\n${result.summary}`);
+      allTopics.push(...result.topics);
+      log(`Map-reduce: chunk ${i + 1}/${chunks.length} summarized`);
+    } catch (err) {
+      warn(`Map-reduce: chunk ${i + 1} failed: ${err}`);
+      // Include a raw excerpt as fallback
+      chunkSummaries.push(`[Chunk ${i + 1}/${chunks.length} — summary failed]\n${chunks[i].slice(0, 500)}`);
+    }
+  }
+
+  // REDUCE: combine summaries into final session note with Sonnet
+  log(`Map-reduce: reducing ${chunkSummaries.length} summaries into final note`);
+  const reducePrompt = REDUCE_PROMPT
+    .replace("{summaries}", chunkSummaries.join("\n\n"))
+    .replace("{transcriptPath}", transcriptPath);
+
+  // Use Sonnet for the synthesis step (generative, needs quality)
+  const sonnetConfig = configForStep(config, "reflectorCall2"); // Falls back to Sonnet
+  const finalConfig = sonnetConfig.model ? sonnetConfig : config; // Ensure we have a model
+
+  const output = await generateObjectSafe(
+    SessionNoteCreateOutputSchema,
+    reducePrompt,
+    finalConfig,
+  );
+
+  // Merge topics from all chunks
+  const mergedTopics = dedupeTopics([...output.topics_touched, ...allTopics]);
+
+  return {
+    abstract: output.abstract,
+    topics_touched: mergedTopics,
+    content: output.content,
+  };
+}
+
 export async function processTranscript(
   scan: TranscriptScanResult,
   config: Config,
@@ -670,18 +821,8 @@ export async function processTranscript(
   // 4. Load existing note (if any)
   const existingNote = await loadSessionNote(scan.sessionId, config);
 
-  // 5. Skip if user has edited the note
-  if (existingNote?.frontmatter.user_edited) {
-    log(`Skipping ${scan.sessionId}: user_edited=true`);
-    // Still update offset so we don't re-scan
-    const state = await loadProcessingState(config);
-    state.sessions[scan.sessionId] = {
-      last_offset: newOffset,
-      last_processed: now(),
-    };
-    await saveProcessingState(state, config);
-    return existingNote;
-  }
+  // 5. user_edited notes still receive appended content — the system
+  // only appends, never modifies existing content, so user edits are safe.
 
   let result: ParsedSessionNote;
 
@@ -707,20 +848,31 @@ export async function processTranscript(
       appendTopics = extracted.topics;
       appendContent = extracted.content;
     } else {
-      // LLM-generated content — make API call (use truncated chunk for LLM)
+      // LLM-generated content
       if (!formattedChunk.trim()) {
         throw new Error(`Transcript chunk is empty after formatting: ${scan.transcriptPath}`);
       }
-      const appendOutput = await extendSessionNoteContent(
-        existingNote.body.slice(-MAX_LLM_CHUNK_CHARS), // cap existing body too
-        llmChunk,
-        existingNote.frontmatter.abstract,
-        config,
-        io
-      );
-      appendAbstract = appendOutput.abstract;
-      appendTopics = appendOutput.topics_touched;
-      appendContent = appendOutput.new_content;
+
+      if (formattedChunk.length > MAX_LLM_CHUNK_CHARS * 2) {
+        // Large new chunk — use map-reduce on just the new content
+        log(`Large append (${Math.round(formattedChunk.length / 1000)}K chars) — using map-reduce`);
+        const mapReduceOutput = await summarizeLargeTranscript(formattedChunk, scan.transcriptPath, config);
+        appendAbstract = mapReduceOutput.abstract;
+        appendTopics = mapReduceOutput.topics_touched;
+        appendContent = mapReduceOutput.content;
+      } else {
+        // Normal size — single LLM call
+        const appendOutput = await extendSessionNoteContent(
+          existingNote.body.slice(-MAX_LLM_CHUNK_CHARS),
+          llmChunk,
+          existingNote.frontmatter.abstract,
+          config,
+          io
+        );
+        appendAbstract = appendOutput.abstract;
+        appendTopics = appendOutput.topics_touched;
+        appendContent = appendOutput.new_content;
+      }
     }
 
     // Only reset processed if the new content is substantial (>500 chars).
@@ -751,35 +903,41 @@ export async function processTranscript(
     };
   } else {
     // 6b. Create new note
+    let createTitle: string;
     let createAbstract: string;
     let createTopics: string[];
     let createContent: string;
 
     if (agentContent) {
-      // Agent-provided content — use directly
+      // Agent-provided content — derive title from abstract
+      createTitle = agentContent.abstract.split(/[.!?]/)[0].slice(0, 60) || "Session note";
       createAbstract = agentContent.abstract;
       createTopics = agentContent.topics_touched;
       createContent = agentContent.content;
     } else if (raw) {
-      // Raw extraction — no LLM, extract metadata from transcript text
+      // Raw extraction — no LLM, use project name as title
       if (!formattedChunk.trim()) {
         throw new Error(`Transcript chunk is empty after formatting: ${scan.transcriptPath}`);
       }
       const extracted = extractRawMetadata(formattedChunk, scan.transcriptPath);
+      createTitle = "Raw capture";
       createAbstract = extracted.abstract;
       createTopics = extracted.topics;
       createContent = extracted.content;
     } else {
-      // LLM-generated content — make API call (use truncated chunk for LLM)
+      // LLM-generated content
       if (!formattedChunk.trim()) {
         throw new Error(`Transcript chunk is empty after formatting: ${scan.transcriptPath}`);
       }
-      const createOutput = await generateSessionNoteContent(
-        llmChunk,
-        scan.transcriptPath,
-        config,
-        io
-      );
+
+      let createOutput: SessionNoteCreateOutput;
+      if (formattedChunk.length > MAX_LLM_CHUNK_CHARS * 2) {
+        log(`Large transcript (${Math.round(formattedChunk.length / 1000)}K chars) — using map-reduce summarization`);
+        createOutput = await summarizeLargeTranscript(formattedChunk, scan.transcriptPath, config);
+      } else {
+        createOutput = await generateSessionNoteContent(llmChunk, scan.transcriptPath, config, io);
+      }
+      createTitle = createOutput.title || createOutput.abstract.split(/[.!?]/)[0].slice(0, 60);
       createAbstract = createOutput.abstract;
       createTopics = createOutput.topics_touched;
       createContent = createOutput.content;
@@ -787,6 +945,7 @@ export async function processTranscript(
 
     const frontmatter: SessionNoteFrontmatter = {
       id: scan.sessionId,
+      title: createTitle,
       source_session: scan.transcriptPath,
       last_offset: newOffset,
       created: now(),
@@ -981,7 +1140,8 @@ function extractRawMetadata(
 
   // Use the formatted transcript as the note body, with a header.
   // Cap at 30K chars to prevent massive notes from raw transcript dumps.
-  const timestamp = new Date().toISOString().split("T")[0];
+  const now = new Date();
+  const timestamp = `${now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} — ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
   const cappedChunk = formattedChunk.length > 30_000
     ? formattedChunk.slice(0, 30_000) + "\n\n[... transcript truncated — full content available in raw transcript file]"
     : formattedChunk;

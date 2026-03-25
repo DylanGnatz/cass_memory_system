@@ -27,6 +27,22 @@ function memoryDir(): string {
   return path.join(os.homedir(), '.memory-system')
 }
 
+/** Extract a readable project name from a transcript path like ~/.claude/projects/-Users-name-Coding-my-project/abc.jsonl */
+function extractProjectName(sourcePath: string): string {
+  if (!sourcePath) return ''
+  try {
+    const dirName = path.basename(path.dirname(sourcePath))
+    const segments = dirName.split('-').filter(Boolean)
+    const codingIdx = segments.findIndex(s => s.toLowerCase() === 'coding')
+    if (codingIdx >= 0 && codingIdx < segments.length - 1) {
+      return segments.slice(codingIdx + 1).join('-')
+    }
+    return segments.slice(-2).join('-')
+  } catch {
+    return ''
+  }
+}
+
 function knowledgeDir(): string {
   return path.join(memoryDir(), 'knowledge')
 }
@@ -275,6 +291,7 @@ export async function readSessionNotes(limit = 50): Promise<SessionNoteSummary[]
         notes.push({
           id: fm.id || file.replace('.md', ''),
           created: fm.created || '',
+          title: fm.title || '',
           last_updated: fm.last_updated || '',
           abstract: fm.abstract || '',
           topics_touched: Array.isArray(fm.topics_touched) ? fm.topics_touched : [],
@@ -299,6 +316,7 @@ export async function readSessionNote(id: string): Promise<SessionNoteData | nul
     return {
       frontmatter: {
         id: fm.id || id,
+        title: fm.title || '',
         created: fm.created || '',
         last_updated: fm.last_updated || '',
         abstract: fm.abstract || '',
@@ -473,6 +491,148 @@ export async function saveFile(relativePath: string, content: string): Promise<v
   const tmpPath = fullPath + '.tmp'
   await fsp.writeFile(tmpPath, content, 'utf-8')
   await fsp.rename(tmpPath, fullPath)
+}
+
+// ============================================================================
+// TRANSCRIPTS
+// ============================================================================
+
+export interface TranscriptInfo {
+  sessionId: string
+  project: string
+  filePath: string
+  sizeKB: number
+  date: string
+  hasSessionNote: boolean
+}
+
+export async function readTranscripts(): Promise<TranscriptInfo[]> {
+  const claudeDir = path.join(os.homedir(), '.claude', 'projects')
+  const results: TranscriptInfo[] = []
+
+  try {
+    const projects = await fsp.readdir(claudeDir, { withFileTypes: true })
+    for (const proj of projects) {
+      if (!proj.isDirectory()) continue
+      const projPath = path.join(claudeDir, proj.name)
+      // Extract readable project name from dir name like -Users-name-Coding-my-project
+      const segments = proj.name.split('-').filter(Boolean)
+      const codingIdx = segments.findIndex(s => s.toLowerCase() === 'coding')
+      const projectName = codingIdx >= 0 && codingIdx < segments.length - 1
+        ? segments.slice(codingIdx + 1).join('-')
+        : segments.slice(-2).join('-')
+
+      try {
+        const files = await fsp.readdir(projPath)
+        for (const file of files) {
+          if (!file.endsWith('.jsonl')) continue
+          try {
+            const filePath = path.join(projPath, file)
+            const stat = await fsp.stat(filePath)
+            const basename = file.replace('.jsonl', '')
+            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(basename)
+            const sessionId = isUUID ? `session-${basename}` : `session-${basename.slice(0, 16)}`
+
+            // Check if a session note exists
+            const notePath = path.join(memoryDir(), 'session-notes', `${sessionId}.md`)
+            let hasNote = false
+            try { await fsp.access(notePath); hasNote = true } catch {}
+
+            results.push({
+              sessionId,
+              project: projectName,
+              filePath,
+              sizeKB: Math.round(stat.size / 1024),
+              date: stat.mtime.toISOString().split('T')[0],
+              hasSessionNote: hasNote,
+            })
+          } catch { /* skip */ }
+        }
+      } catch { /* skip project */ }
+    }
+  } catch { /* no claude dir */ }
+
+  // Sort by date descending
+  results.sort((a, b) => b.date.localeCompare(a.date))
+  return results
+}
+
+/**
+ * Format JSONL transcript entries into readable markdown.
+ * Shared by readTranscriptChunk.
+ */
+function formatTranscriptEntries(raw: string): string[] {
+  const lines = raw.split('\n').filter(l => l.trim())
+  const formatted: string[] = []
+
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line)
+
+      if (entry.type === 'user' || entry.type === 'assistant') {
+        const msg = entry.message
+        if (!msg) continue
+
+        let text = ''
+        const content = msg.content || msg
+        if (typeof content === 'string') {
+          text = content
+        } else if (Array.isArray(content)) {
+          text = content
+            .filter((b: any) => b.type === 'text')
+            .map((b: any) => b.text || '')
+            .join('\n')
+            .replace(/<[^>]+>[^<]*<\/[^>]+>/g, '')
+            .replace(/<[^>]+\/>/g, '')
+        }
+
+        text = text.trim()
+        if (!text) continue
+
+        const role = entry.type === 'user' ? '**User**' : '**Assistant**'
+        formatted.push(`${role}:\n${text.slice(0, 2000)}`)
+      } else if (entry.message?.content && Array.isArray(entry.message.content)) {
+        for (const b of entry.message.content) {
+          if (b.type === 'tool_use') {
+            formatted.push(`> Tool: **${b.name}**`)
+          }
+        }
+      }
+    } catch { /* skip non-JSON lines */ }
+  }
+
+  return formatted
+}
+
+/** Read a chunk of a transcript file from a byte offset. Returns { content, bytesRead, totalSize, hasMore }. */
+export async function readTranscriptChunk(
+  filePath: string,
+  offset: number = 0,
+  chunkSize: number = 500_000
+): Promise<{ content: string; bytesRead: number; totalSize: number; hasMore: boolean }> {
+  try {
+    const stat = await fsp.stat(filePath)
+    const totalSize = stat.size
+
+    if (offset >= totalSize) {
+      return { content: '', bytesRead: 0, totalSize, hasMore: false }
+    }
+
+    const fd = await fsp.open(filePath, 'r')
+    const readSize = Math.min(chunkSize, totalSize - offset)
+    const buf = Buffer.alloc(readSize)
+    const { bytesRead } = await fd.read(buf, 0, readSize, offset)
+    await fd.close()
+
+    const raw = buf.toString('utf-8', 0, bytesRead)
+    const formatted = formatTranscriptEntries(raw)
+    const content = formatted.join('\n\n')
+    const hasMore = offset + bytesRead < totalSize
+
+    return { content, bytesRead, totalSize, hasMore }
+  } catch (err) {
+    return { content: `(Could not read transcript: ${err})`, bytesRead: 0, totalSize: 0, hasMore: false }
+  }
 }
 
 export { memoryDir }
