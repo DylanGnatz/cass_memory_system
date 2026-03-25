@@ -5,7 +5,7 @@ import { relativeTime, plural } from '../../lib/formatters'
 
 export default function StatusBar(): React.ReactElement {
   const { data: status } = useStatus()
-  const { isReflecting, setReflecting } = useUIStore()
+  const { isReflecting, setReflecting, navigate, currentView } = useUIStore()
   const [reflectMessage, setReflectMessage] = useState<string | null>(null)
 
   const handleReflect = useCallback(async () => {
@@ -18,7 +18,6 @@ export default function StatusBar(): React.ReactElement {
       setReflectMessage(err?.message || 'Reflection failed')
     } finally {
       setReflecting(false)
-      // Clear message after 8 seconds
       setTimeout(() => setReflectMessage(null), 8000)
     }
   }, [setReflecting])
@@ -54,6 +53,13 @@ export default function StatusBar(): React.ReactElement {
         )}
       </div>
       <div className="statusbar__right">
+        <button
+          className={`statusbar__btn ${currentView.type === 'settings' ? 'statusbar__btn--active' : ''}`}
+          onClick={() => navigate({ type: 'settings' })}
+          title="Settings"
+        >
+          &#x2699;
+        </button>
         <button
           className={`statusbar__btn ${isReflecting ? 'statusbar__btn--running' : ''}`}
           onClick={handleReflect}

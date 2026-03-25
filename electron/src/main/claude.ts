@@ -82,14 +82,16 @@ async function fulfillTool(name: string, input: any): Promise<string> {
   return `Unknown tool: ${name}`
 }
 
-/** Check if an API key is configured. */
-export function isClaudeAvailable(): boolean {
-  return !!(process.env.ANTHROPIC_API_KEY)
+/** Check if an API key is configured (env or config.json). */
+export async function isClaudeAvailable(): Promise<boolean> {
+  const { hasApiKey } = await import('./settings')
+  return hasApiKey()
 }
 
-/** Get the API key from environment. */
-function getApiKey(): string | null {
-  return process.env.ANTHROPIC_API_KEY || null
+/** Get the API key from environment or config.json. */
+async function getApiKeyFromSettings(): Promise<string | null> {
+  const { getApiKey: getKey } = await import('./settings')
+  return getKey()
 }
 
 /** Reset conversation history. */
@@ -105,9 +107,9 @@ export async function sendMessage(
   userMessage: string,
   options?: { documentContext?: string }
 ): Promise<{ response: string; toolsUsed: string[] }> {
-  const apiKey = getApiKey()
+  const apiKey = await getApiKeyFromSettings()
   if (!apiKey) {
-    throw new Error('ANTHROPIC_API_KEY not set. Configure it in your environment to use the Claude dialog.')
+    throw new Error('No API key configured. Add your Anthropic API key in Settings.')
   }
 
   const anthropic = getClient(apiKey)

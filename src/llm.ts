@@ -16,6 +16,19 @@ import { truncateForContext, warn } from "./utils.js";
 // Re-export LLMProvider from types.ts (single source of truth)
 export type { LLMProvider } from "./types.js";
 
+/**
+ * Create a config override for a specific pipeline step.
+ * If the step has a model override configured, returns config with that model.
+ * Empty string means "use default config.model".
+ */
+export type PipelineStep = "sessionNoteCreate" | "sessionNoteExtend" | "diaryFromNote" | "reflectorCall1" | "reflectorCall2" | "knowledgeGen";
+
+export function configForStep(config: Config, step: PipelineStep): Config {
+  const override = config.pipelineModels?.[step];
+  if (!override) return config;
+  return { ...config, model: override };
+}
+
 export interface LLMUsage {
   promptTokens: number;
   completionTokens: number;
@@ -469,14 +482,20 @@ Bullet fields:
 - content: The rule text (1-2 sentences max)
 - scope: "global" (any project), "workspace" (this repo), "language", "framework", or "task"
 - category: Short category label (e.g. "testing", "deployment", "error-handling")
-- type: "pattern" (do this) or "anti-pattern" (don't do this)
-- kind: "learned" (discovered during work) or "prescribed" (user stated preference)
+- type: "rule" (do this) or "anti-pattern" (don't do this)
+- kind: "project_convention", "stack_pattern", "workflow_rule", or "anti_pattern"
 - reasoning: Why this bullet is worth extracting (1 sentence)
 
 Maximum 10 bullets. Prefer fewer, higher-quality bullets over many weak ones.
 
 INSTRUCTIONS — TOPIC SUGGESTIONS:
-If the session covered knowledge that doesn't fit any existing topic, suggest new topics. Only suggest topics that represent a coherent, recurring subject area — not one-off tasks.
+If the session covered a subject area NOT covered by any existing topic, suggest a new topic. The user will review and approve/dismiss suggestions — so err on the side of suggesting rather than dropping knowledge silently.
+
+Rules:
+- Prefer routing to existing topics when they fit, especially user-defined ones
+- If no existing topic covers the session's main subject, ALWAYS suggest one
+- Topics should be broad enough to accumulate knowledge over time (e.g. "transit-data-processing" not "fix-gtfs-parser-bug")
+- Include a clear description so the system knows what to route there in the future
 
 Topic fields:
 - slug: kebab-case identifier (e.g. "billing-webhooks")
@@ -484,7 +503,7 @@ Topic fields:
 - description: 1-sentence description of what this topic covers
 - reasoning: Why this should be a standalone topic
 
-Maximum 3 topic suggestions. Most sessions need 0.`,
+Maximum 3 topic suggestions per session.`,
 
   reflectorCall2: `You are adding new knowledge from a coding session to a wiki-style knowledge base.
 
@@ -507,18 +526,20 @@ CRITICAL: Your primary source is the session note below. The existing knowledge 
 </available_topics>
 
 KNOWLEDGE SECTIONS:
-Each section you write will be APPENDED to a topic's knowledge page (one markdown file per topic at knowledge/{topic-slug}.md). If the page already exists, your section is added after existing sections. If the page doesn't exist yet, it will be created with your section as the first entry.
+Each topic is a directory with sub-pages: knowledge/{topic-slug}/{sub-page}.md
+Topics have named sub-pages, each with a description of what belongs there. Route your sections to the most appropriate sub-page based on its description.
 
-Route sections to topic slugs from <available_topics>. Always pick the best-fit topic — slightly misrouted knowledge is better than dropped knowledge. Never omit a section because the topic fit isn't perfect.
+IMPORTANT: Only write sections for topics that ALREADY EXIST in <available_topics>. Do NOT write sections for topics that don't exist — that content will be captured when the user creates the appropriate topic. It's fine to produce zero knowledge sections if no existing topic fits.
 
 For each section, provide:
-- topic_slug: Which topic page it belongs on
+- topic_slug: Which topic it belongs to (must exist in available_topics)
+- sub_page: Which sub-page file to write to (match by description from available_topics, or "_index" for the topic's main page if no sub-page fits)
 - section_title: Short heading (e.g. "Webhook HMAC Validation", "FTS5 Configuration")
-- content: Detailed, factual prose (2-6 sentences) that would help someone working in this area. Include specific paths, configs, error messages, commands. Add source references where relevant (e.g. "Learned: Session {sessionId}", links, ticket numbers).
+- content: Detailed, factual prose (2-6 sentences) that would help someone working in this area. Include specific paths, configs, error messages, commands.
 - confidence: "verified" (confirmed working), "inferred" (reasonable but untested), "uncertain" (ambiguous)
 - related_bullet_indices: Which bullets from the structural extraction relate to this section (0-based indices)
 
-Skip ephemeral facts (local env state, one-off debug output, current version numbers that will change). Only write sections for genuinely new information not already covered in existing pages.
+Skip ephemeral facts. Only write sections for genuinely new information not already covered in existing pages.
 
 DIGEST:
 Write a single paragraph (2-4 sentences) summarizing this session for the daily digest file (digests/YYYY-MM-DD.md). Each session contributes one paragraph — yours will be appended alongside others from today. Focus on outcomes and decisions, not process.`,
@@ -958,7 +979,7 @@ export async function generateSessionNoteContent(
   });
 
   return llmWithRetry(async () => {
-    return generateObjectSafe(SessionNoteCreateOutputSchema, prompt, config, 3, io);
+    return generateObjectSafe(SessionNoteCreateOutputSchema, prompt, configForStep(config, "sessionNoteCreate"), 3, io);
   }, "generateSessionNoteContent");
 }
 
@@ -979,7 +1000,7 @@ export async function extendSessionNoteContent(
   });
 
   return llmWithRetry(async () => {
-    return generateObjectSafe(SessionNoteAppendOutputSchema, prompt, config, 3, io);
+    return generateObjectSafe(SessionNoteAppendOutputSchema, prompt, configForStep(config, "sessionNoteExtend"), 3, io);
   }, "extendSessionNoteContent");
 }
 
@@ -1000,7 +1021,7 @@ export async function extractDiaryFromNote(
   });
 
   return llmWithRetry(async () => {
-    return generateObjectSafe(DiaryFromNoteOutputSchema, prompt, config, 3, io);
+    return generateObjectSafe(DiaryFromNoteOutputSchema, prompt, configForStep(config, "diaryFromNote"), 3, io);
   }, "extractDiaryFromNote");
 }
 
@@ -1038,7 +1059,7 @@ export async function runReflectorCall1(
   });
 
   return llmWithRetry(async () => {
-    return generateObjectSafe(ReflectorCall1OutputSchema, prompt, config, 3, io);
+    return generateObjectSafe(ReflectorCall1OutputSchema, prompt, configForStep(config, "reflectorCall1"), 3, io);
   }, "runReflectorCall1");
 }
 
@@ -1069,7 +1090,7 @@ Tags: ${diary.tags.join(", ") || "(none)"}`;
   });
 
   return llmWithRetry(async () => {
-    return generateObjectSafe(ReflectorCall2OutputSchema, prompt, config, 3, io);
+    return generateObjectSafe(ReflectorCall2OutputSchema, prompt, configForStep(config, "reflectorCall2"), 3, io);
   }, "runReflectorCall2");
 }
 

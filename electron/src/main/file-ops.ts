@@ -29,12 +29,45 @@ async function saveQueueFile(data: any): Promise<void> {
   await fsp.rename(tmp, filePath)
 }
 
-export async function approveReviewItem(id: string): Promise<void> {
+/** Returns the topic slug if a topic suggestion was approved (for triggering generation). */
+export async function approveReviewItem(id: string): Promise<{ topicSlug?: string }> {
   const queue = await loadQueueFile()
   const item = queue.items?.find((i: any) => i.id === id)
   if (!item) throw new Error(`Review item not found: ${id}`)
   item.status = 'approved'
   await saveQueueFile(queue)
+
+  // If this is a topic suggestion, create the topic in topics.json + directory
+  if (item.type === 'topic_suggestion' && item.data) {
+    const topicsPath = path.join(memoryDir(), 'topics.json')
+    let topicsData: any = { topics: [] }
+    try {
+      topicsData = JSON.parse(await fsp.readFile(topicsPath, 'utf-8'))
+    } catch { /* no file yet */ }
+
+    const exists = topicsData.topics.some((t: any) => t.slug === item.target_topic)
+    if (!exists) {
+      topicsData.topics.push({
+        slug: item.target_topic,
+        name: item.data.name,
+        description: item.data.description,
+        source: 'system',
+        created: new Date().toISOString().split('T')[0],
+        subpages: []
+      })
+      const tmp = topicsPath + '.tmp'
+      await fsp.writeFile(tmp, JSON.stringify(topicsData, null, 2), 'utf-8')
+      await fsp.rename(tmp, topicsPath)
+
+      // Create topic directory with _index.md
+      const topicDir = path.join(memoryDir(), 'knowledge', item.target_topic)
+      await fsp.mkdir(topicDir, { recursive: true })
+      const indexContent = `---\ntopic: ${item.data.name}\ndescription: "${item.data.description}"\nsource: system\ncreated: ${new Date().toISOString().split('T')[0]}\nlast_updated: ${new Date().toISOString().split('T')[0]}\n---\n`
+      await fsp.writeFile(path.join(topicDir, '_index.md'), indexContent, 'utf-8')
+    }
+    return { topicSlug: item.target_topic }
+  }
+  return {}
 }
 
 export async function dismissReviewItem(id: string): Promise<void> {
@@ -43,6 +76,44 @@ export async function dismissReviewItem(id: string): Promise<void> {
   if (!item) throw new Error(`Review item not found: ${id}`)
   item.status = 'dismissed'
   await saveQueueFile(queue)
+
+  // If dismissing a topic suggestion, clean up the orphaned knowledge page
+  if (item.type === 'topic_suggestion' && item.target_topic) {
+    const pagePath = path.join(memoryDir(), 'knowledge', `${item.target_topic}.md`)
+    try {
+      await fsp.unlink(pagePath)
+    } catch { /* file may not exist — that's fine */ }
+  }
+}
+
+// ============================================================================
+// TOPIC DELETION
+// ============================================================================
+
+export async function deleteTopic(slug: string): Promise<void> {
+  // 1. Remove from topics.json
+  const topicsPath = path.join(memoryDir(), 'topics.json')
+  let topicsData: any = { topics: [] }
+  try {
+    topicsData = JSON.parse(await fsp.readFile(topicsPath, 'utf-8'))
+  } catch { /* no file */ }
+
+  topicsData.topics = topicsData.topics.filter((t: any) => t.slug !== slug)
+  const tmp = topicsPath + '.tmp'
+  await fsp.writeFile(tmp, JSON.stringify(topicsData, null, 2), 'utf-8')
+  await fsp.rename(tmp, topicsPath)
+
+  // 2. Delete knowledge directory
+  const topicDir = path.join(memoryDir(), 'knowledge', slug)
+  try {
+    await fsp.rm(topicDir, { recursive: true, force: true })
+  } catch { /* dir may not exist */ }
+
+  // 3. Delete legacy flat file if it exists
+  const legacyFile = path.join(memoryDir(), 'knowledge', `${slug}.md`)
+  try {
+    await fsp.unlink(legacyFile)
+  } catch { /* file may not exist */ }
 }
 
 export async function flagContent(targetPath: string, section?: string, reason?: string): Promise<void> {
@@ -107,6 +178,44 @@ export async function unstarItem(itemPath: string, section?: string): Promise<vo
     return k !== key
   })
   await saveStarredFile(data)
+}
+
+// ============================================================================
+// SUB-PAGES
+// ============================================================================
+
+export async function addSubPage(
+  topicSlug: string,
+  subPageSlug: string,
+  name: string,
+  description: string
+): Promise<void> {
+  // 1. Update topics.json
+  const topicsPath = path.join(memoryDir(), 'topics.json')
+  let topicsData: any = { topics: [] }
+  try {
+    topicsData = JSON.parse(await fsp.readFile(topicsPath, 'utf-8'))
+  } catch { /* no file */ }
+
+  const topic = topicsData.topics.find((t: any) => t.slug === topicSlug)
+  if (!topic) throw new Error(`Topic "${topicSlug}" not found`)
+
+  if (!topic.subpages) topic.subpages = []
+  if (topic.subpages.some((sp: any) => sp.slug === subPageSlug)) {
+    throw new Error(`Sub-page "${subPageSlug}" already exists in "${topicSlug}"`)
+  }
+
+  topic.subpages.push({ slug: subPageSlug, name, description })
+  const tmp = topicsPath + '.tmp'
+  await fsp.writeFile(tmp, JSON.stringify(topicsData, null, 2), 'utf-8')
+  await fsp.rename(tmp, topicsPath)
+
+  // 2. Create the sub-page .md file
+  const today = new Date().toISOString().split('T')[0]
+  const pageContent = `---\ntopic: ${name}\ndescription: "${description}"\nsource: user\ncreated: ${today}\nlast_updated: ${today}\n---\n`
+  const topicDir = path.join(memoryDir(), 'knowledge', topicSlug)
+  await fsp.mkdir(topicDir, { recursive: true })
+  await fsp.writeFile(path.join(topicDir, `${subPageSlug}.md`), pageContent, 'utf-8')
 }
 
 // ============================================================================

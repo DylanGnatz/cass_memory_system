@@ -76,16 +76,16 @@ describe("Phase 4 topic management", () => {
       const config = await loadConfig();
       await addTopic("billing", "Billing", "Payments", "user", config);
 
-      // Create a knowledge page
+      // Write content to the topic directory's _index.md (addTopic already created the directory)
       const knowledgeDir = path.join(env.cassMemoryDir, "knowledge");
-      await mkdir(knowledgeDir, { recursive: true });
       await writeFile(
-        path.join(knowledgeDir, "billing.md"),
+        path.join(knowledgeDir, "billing", "_index.md"),
         `---
 topic: Billing
-slug: billing
-created: "2026-03-20"
-updated: "2026-03-20"
+description: "Payments"
+source: user
+created: 2026-03-20
+last_updated: 2026-03-20
 ---
 
 ## Webhook Validation

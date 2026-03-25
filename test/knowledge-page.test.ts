@@ -224,7 +224,9 @@ describe("file I/O", () => {
       related_bullets: ["b-123"],
     };
 
-    const result = await appendSectionToPage(delta, undefined, config);
+    // Provide a topic object — appendSectionToPage now requires it
+    const topic = { slug: "billing-service", name: "Billing", description: "test", source: "user" as const, created: "2026-03-23", subpages: [] };
+    const result = await appendSectionToPage(delta, topic, config);
     expect(result.written).toBe(true);
 
     const loaded = await loadKnowledgePage("billing-service", config);
@@ -249,7 +251,8 @@ describe("file I/O", () => {
       related_bullets: [],
     };
 
-    const result = await appendSectionToPage(delta, undefined, config);
+    const topic = { slug: "billing-service", name: "Billing", description: "test", source: "user" as const, created: "2026-03-23", subpages: [] };
+    const result = await appendSectionToPage(delta, topic, config);
     expect(result.written).toBe(false);
     expect(result.reason).toContain("already exists");
   });
@@ -283,22 +286,22 @@ describe("topics.json I/O", () => {
     expect(loaded[0].slug).toBe("billing");
   });
 
-  it("addTopicSuggestion adds new topic", async () => {
+  it("addTopicSuggestion queues to review queue instead of creating topic", async () => {
     const result = await addTopicSuggestion("new-slug", "New Topic", "desc", "session-1", config);
     expect(result.added).toBe(true);
+    expect(result.reason).toContain("review");
 
+    // Topic should NOT be in topics.json
     const topics = await loadTopics(config);
-    expect(topics).toHaveLength(1);
-    expect(topics[0].source).toBe("system");
+    expect(topics).toHaveLength(0);
   });
 
-  it("addTopicSuggestion skips duplicate slug", async () => {
-    await addTopicSuggestion("existing", "Existing", "desc", "session-1", config);
+  it("addTopicSuggestion skips when topic already exists in topics.json", async () => {
+    // Add topic directly first
+    await saveTopics([{ slug: "existing", name: "Existing", description: "desc", source: "user", created: "2026-03-23", subpages: [] }], config);
     const result = await addTopicSuggestion("existing", "Existing V2", "desc", "session-2", config);
     expect(result.added).toBe(false);
-
-    const topics = await loadTopics(config);
-    expect(topics).toHaveLength(1);
+    expect(result.reason).toContain("already exists");
   });
 });
 

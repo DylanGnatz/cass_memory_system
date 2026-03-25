@@ -5,6 +5,7 @@ import { ipcMain } from 'electron'
 import {
   readTopics,
   readKnowledgePage,
+  readSubPages,
   readSessionNotes,
   readSessionNote,
   readDigests,
@@ -17,18 +18,21 @@ import {
   saveFile
 } from './file-reader'
 import { search } from './search'
-import { cliAddTopic, cliRemoveTopic, cliRunReflection } from './cli-bridge'
+import { cliAddTopic, cliRemoveTopic, cliRunReflection, cliGenerateTopicKnowledge } from './cli-bridge'
 import {
   approveReviewItem,
   dismissReviewItem,
   flagContent,
   starItem,
   unstarItem,
+  addSubPage,
+  deleteTopic,
   createUserNote,
   saveUserNote,
   deleteUserNote
 } from './file-ops'
 import { isClaudeAvailable, sendMessage, resetConversation } from './claude'
+import { getApiKey, setApiKey, hasApiKey, getBudget, setBudget } from './settings'
 
 export function registerIpcHandlers(): void {
   // ── File reads ──────────────────────────────────────────────────
@@ -36,8 +40,12 @@ export function registerIpcHandlers(): void {
     return readTopics()
   })
 
-  ipcMain.handle('get-knowledge-page', async (_event, slug: string) => {
-    return readKnowledgePage(slug)
+  ipcMain.handle('get-knowledge-page', async (_event, slug: string, subPage?: string) => {
+    return readKnowledgePage(slug, subPage)
+  })
+
+  ipcMain.handle('get-sub-pages', async (_event, topicSlug: string) => {
+    return readSubPages(topicSlug)
   })
 
   ipcMain.handle('get-session-notes', async (_event, limit?: number) => {
@@ -99,9 +107,30 @@ export function registerIpcHandlers(): void {
     return cliRemoveTopic(slug, force)
   })
 
+  ipcMain.handle('add-sub-page', async (_event, topicSlug: string, subPageSlug: string, name: string, description: string) => {
+    return addSubPage(topicSlug, subPageSlug, name, description)
+  })
+
   // ── Direct file operations ──────────────────────────────────────
   ipcMain.handle('approve-review-item', async (_event, id: string) => {
-    return approveReviewItem(id)
+    const result = await approveReviewItem(id)
+    // If a topic was approved, trigger background knowledge generation
+    if (result.topicSlug) {
+      cliGenerateTopicKnowledge(result.topicSlug).then(genResult => {
+        console.log(`[ipc] Background generation for "${result.topicSlug}":`, genResult.message)
+      }).catch(err => {
+        console.error(`[ipc] Background generation failed for "${result.topicSlug}":`, err)
+      })
+    }
+    return result
+  })
+
+  ipcMain.handle('delete-topic', async (_event, slug: string) => {
+    return deleteTopic(slug)
+  })
+
+  ipcMain.handle('generate-topic-knowledge', async (_event, slug: string) => {
+    return cliGenerateTopicKnowledge(slug)
   })
 
   ipcMain.handle('dismiss-review-item', async (_event, id: string) => {
@@ -143,5 +172,29 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('claude-reset', async () => {
     return resetConversation()
+  })
+
+  // ── Settings ────────────────────────────────────────────────────
+  ipcMain.handle('get-api-key', async () => {
+    const key = await getApiKey()
+    if (!key) return null
+    // Mask the key for display — only show last 8 chars
+    return key.length > 12 ? '...' + key.slice(-8) : '(set)'
+  })
+
+  ipcMain.handle('has-api-key', async () => {
+    return hasApiKey()
+  })
+
+  ipcMain.handle('set-api-key', async (_event, key: string) => {
+    await setApiKey(key)
+  })
+
+  ipcMain.handle('get-budget', async () => {
+    return getBudget()
+  })
+
+  ipcMain.handle('set-budget', async (_event, dailyLimit: number, monthlyLimit: number) => {
+    await setBudget(dailyLimit, monthlyLimit)
   })
 }

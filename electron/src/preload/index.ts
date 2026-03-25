@@ -7,8 +7,10 @@ const electronAPI = {
   // File reads (direct, fast)
   getTopics: (): Promise<any[]> =>
     ipcRenderer.invoke('get-topics'),
-  getKnowledgePage: (slug: string): Promise<any> =>
-    ipcRenderer.invoke('get-knowledge-page', slug),
+  getKnowledgePage: (slug: string, subPage?: string): Promise<any> =>
+    ipcRenderer.invoke('get-knowledge-page', slug, subPage),
+  getSubPages: (topicSlug: string): Promise<string[]> =>
+    ipcRenderer.invoke('get-sub-pages', topicSlug),
   getSessionNotes: (limit?: number): Promise<any[]> =>
     ipcRenderer.invoke('get-session-notes', limit),
   getSessionNote: (id: string): Promise<any> =>
@@ -41,6 +43,12 @@ const electronAPI = {
     ipcRenderer.invoke('add-topic', slug, name, description),
   removeTopic: (slug: string, force?: boolean): Promise<void> =>
     ipcRenderer.invoke('remove-topic', slug, force),
+  deleteTopic: (slug: string): Promise<void> =>
+    ipcRenderer.invoke('delete-topic', slug),
+  generateTopicKnowledge: (slug: string): Promise<any> =>
+    ipcRenderer.invoke('generate-topic-knowledge', slug),
+  addSubPage: (topicSlug: string, subPageSlug: string, name: string, description: string): Promise<void> =>
+    ipcRenderer.invoke('add-sub-page', topicSlug, subPageSlug, name, description),
   approveReviewItem: (id: string): Promise<void> =>
     ipcRenderer.invoke('approve-review-item', id),
   dismissReviewItem: (id: string): Promise<void> =>
@@ -65,6 +73,18 @@ const electronAPI = {
     ipcRenderer.invoke('claude-send', message, documentContext),
   claudeReset: (): Promise<void> =>
     ipcRenderer.invoke('claude-reset'),
+
+  // Settings
+  getApiKey: (): Promise<string | null> =>
+    ipcRenderer.invoke('get-api-key'),
+  hasApiKey: (): Promise<boolean> =>
+    ipcRenderer.invoke('has-api-key'),
+  setApiKey: (key: string): Promise<void> =>
+    ipcRenderer.invoke('set-api-key', key),
+  getBudget: (): Promise<{ dailyLimit: number; monthlyLimit: number }> =>
+    ipcRenderer.invoke('get-budget'),
+  setBudget: (dailyLimit: number, monthlyLimit: number): Promise<void> =>
+    ipcRenderer.invoke('set-budget', dailyLimit, monthlyLimit),
 
   // File watching — renderer listens for change signals
   onFileChanged: (callback: () => void): (() => void) => {

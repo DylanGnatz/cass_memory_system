@@ -162,21 +162,43 @@ export async function readTopics(): Promise<TopicSummary[]> {
     const data = JSON.parse(raw)
     const topics = data.topics || []
 
-    // Enrich with knowledge page metadata
+    // Enrich with knowledge page metadata (supports directory + legacy flat file)
     const result: TopicSummary[] = []
     for (const t of topics) {
       let sectionCount = 0
       let wordCount = 0
       let lastUpdated: string | null = null
 
-      const pagePath = path.join(knowledgeDir(), `${t.slug}.md`)
+      // Try directory model first
+      const topicDir = path.join(knowledgeDir(), t.slug)
       try {
-        const pageRaw = await fsp.readFile(pagePath, 'utf-8')
-        const page = parseKnowledgePage(pageRaw)
-        sectionCount = page.sections.length
-        wordCount = page.sections.reduce((sum, s) => sum + s.content.split(/\s+/).length, 0)
-        lastUpdated = page.frontmatter.last_updated || null
-      } catch { /* no knowledge page yet */ }
+        const stat = await fsp.stat(topicDir)
+        if (stat.isDirectory()) {
+          const subFiles = await fsp.readdir(topicDir)
+          for (const sf of subFiles) {
+            if (!sf.endsWith('.md')) continue
+            try {
+              const pageRaw = await fsp.readFile(path.join(topicDir, sf), 'utf-8')
+              const page = parseKnowledgePage(pageRaw)
+              sectionCount += page.sections.length
+              wordCount += page.sections.reduce((sum, s) => sum + s.content.split(/\s+/).length, 0)
+              if (page.frontmatter.last_updated && (!lastUpdated || page.frontmatter.last_updated > lastUpdated)) {
+                lastUpdated = page.frontmatter.last_updated
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+      } catch {
+        // Fall back to legacy flat file
+        const pagePath = path.join(knowledgeDir(), `${t.slug}.md`)
+        try {
+          const pageRaw = await fsp.readFile(pagePath, 'utf-8')
+          const page = parseKnowledgePage(pageRaw)
+          sectionCount = page.sections.length
+          wordCount = page.sections.reduce((sum, s) => sum + s.content.split(/\s+/).length, 0)
+          lastUpdated = page.frontmatter.last_updated || null
+        } catch { /* no knowledge page yet */ }
+      }
 
       result.push({
         slug: t.slug,
@@ -196,7 +218,41 @@ export async function readTopics(): Promise<TopicSummary[]> {
   }
 }
 
-export async function readKnowledgePage(slug: string): Promise<KnowledgePageData | null> {
+/** List sub-pages for a topic directory. Returns slugs (without .md). */
+export async function readSubPages(topicSlug: string): Promise<string[]> {
+  const topicDir = path.join(knowledgeDir(), topicSlug)
+  try {
+    const files = await fsp.readdir(topicDir)
+    return files
+      .filter(f => f.endsWith('.md'))
+      .map(f => f.replace('.md', ''))
+      .sort((a, b) => {
+        if (a === '_index') return -1
+        if (b === '_index') return 1
+        return a.localeCompare(b)
+      })
+  } catch {
+    return []
+  }
+}
+
+export async function readKnowledgePage(slug: string, subPage?: string): Promise<KnowledgePageData | null> {
+  // Try directory model first
+  if (subPage) {
+    const spPath = path.join(knowledgeDir(), slug, `${subPage}.md`)
+    try {
+      const raw = await fsp.readFile(spPath, 'utf-8')
+      return parseKnowledgePage(raw)
+    } catch { return null }
+  }
+
+  // Default: try _index.md in directory, then legacy flat file
+  const indexPath = path.join(knowledgeDir(), slug, '_index.md')
+  try {
+    const raw = await fsp.readFile(indexPath, 'utf-8')
+    return parseKnowledgePage(raw)
+  } catch { /* try legacy */ }
+
   const pagePath = path.join(knowledgeDir(), `${slug}.md`)
   try {
     const raw = await fsp.readFile(pagePath, 'utf-8')

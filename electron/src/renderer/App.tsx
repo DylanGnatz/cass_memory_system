@@ -10,6 +10,7 @@ import SessionNote from './components/content/SessionNote'
 import DigestView from './components/content/DigestView'
 import UserNote from './components/content/UserNote'
 import ReviewQueue from './components/content/ReviewQueue'
+import Settings from './components/content/Settings'
 import InvalidateDialog from './components/actions/InvalidateDialog'
 import FlagDialog from './components/actions/FlagDialog'
 import ClaudeDialog from './components/claude/ClaudeDialog'
@@ -19,7 +20,7 @@ function ContentArea(): React.ReactElement {
 
   switch (currentView.type) {
     case 'knowledge':
-      return <KnowledgePage slug={currentView.slug} />
+      return <KnowledgePage slug={currentView.slug} subPage={currentView.subPage} />
     case 'session':
       return <SessionNote id={currentView.id} />
     case 'digest':
@@ -28,6 +29,8 @@ function ContentArea(): React.ReactElement {
       return <UserNote id={currentView.id} />
     case 'review-queue':
       return <ReviewQueue />
+    case 'settings':
+      return <Settings />
     default:
       return (
         <div className="content-empty">
@@ -42,9 +45,10 @@ function ContentArea(): React.ReactElement {
 
 export default function App(): React.ReactElement {
   useFileWatcher()
+  const { sidebarWidth } = useUIStore()
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={{ gridTemplateColumns: `${sidebarWidth}px 4px 1fr` }}>
       <SearchBar />
       <Sidebar />
       <div className="content">

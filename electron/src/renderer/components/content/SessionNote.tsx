@@ -3,6 +3,7 @@ import { useSessionNote } from '../../hooks/use-session-notes'
 import { useUIStore } from '../../stores/ui-store'
 import MarkdownRenderer from './MarkdownRenderer'
 import Editor from './Editor'
+import StarButton from '../actions/StarButton'
 import { formatDate } from '../../lib/formatters'
 
 interface Props {
@@ -62,12 +63,15 @@ ${note.body}`
       <div className="session-header">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div className="session-header__id">{fm.id}</div>
-          <button className="btn btn--ghost btn--sm" onClick={() => {
-            setEditContent('')
-            setEditing(true)
-          }}>
-            Edit
-          </button>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <StarButton path={`session-notes/${id}.md`} />
+            <button className="btn btn--ghost btn--sm" onClick={() => {
+              setEditContent('')
+              setEditing(true)
+            }}>
+              Edit
+            </button>
+          </div>
         </div>
         {fm.abstract && (
           <div className="session-header__abstract">{fm.abstract}</div>

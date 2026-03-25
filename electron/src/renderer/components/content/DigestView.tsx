@@ -1,6 +1,7 @@
 import React from 'react'
 import { useDigest } from '../../hooks/use-digests'
 import MarkdownRenderer from './MarkdownRenderer'
+import StarButton from '../actions/StarButton'
 import { formatDateLong } from '../../lib/formatters'
 
 interface Props {
@@ -30,8 +31,9 @@ export default function DigestView({ date }: Props): React.ReactElement {
 
   return (
     <div>
-      <div className="digest-header">
-        Daily Digest — {formatDateLong(date)}
+      <div className="digest-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>Daily Digest — {formatDateLong(date)}</span>
+        <StarButton path={`digests/${date}.md`} />
       </div>
       <MarkdownRenderer content={content} />
     </div>

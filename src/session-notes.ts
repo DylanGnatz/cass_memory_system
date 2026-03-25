@@ -650,6 +650,13 @@ export async function processTranscript(
   // 2. Format the raw JSONL into readable text (for FTS + LLM fallback)
   const formattedChunk = rawChunk.trim() ? formatTranscriptChunk(rawChunk) : "";
 
+  // Cap formatted chunk for LLM calls — full version used for FTS, truncated for LLM.
+  // 30K chars ≈ 7.5K tokens, leaving room for prompt overhead within rate limits.
+  const MAX_LLM_CHUNK_CHARS = 30_000;
+  const llmChunk = formattedChunk.length > MAX_LLM_CHUNK_CHARS
+    ? formattedChunk.slice(0, MAX_LLM_CHUNK_CHARS) + "\n\n[... transcript truncated for processing]"
+    : formattedChunk;
+
   // 3. Index transcript chunk into FTS if search index provided
   if (searchIndex && formattedChunk.trim()) {
     const chunk: TranscriptChunk = {
@@ -700,13 +707,13 @@ export async function processTranscript(
       appendTopics = extracted.topics;
       appendContent = extracted.content;
     } else {
-      // LLM-generated content — make API call
+      // LLM-generated content — make API call (use truncated chunk for LLM)
       if (!formattedChunk.trim()) {
         throw new Error(`Transcript chunk is empty after formatting: ${scan.transcriptPath}`);
       }
       const appendOutput = await extendSessionNoteContent(
-        existingNote.body,
-        formattedChunk,
+        existingNote.body.slice(-MAX_LLM_CHUNK_CHARS), // cap existing body too
+        llmChunk,
         existingNote.frontmatter.abstract,
         config,
         io
@@ -715,6 +722,11 @@ export async function processTranscript(
       appendTopics = appendOutput.topics_touched;
       appendContent = appendOutput.new_content;
     }
+
+    // Only reset processed if the new content is substantial (>500 chars).
+    // Small appends (metadata updates, short additions) don't warrant re-processing
+    // through the full Reflector pipeline.
+    const hasSubstantialNewContent = appendContent.trim().length > 500;
 
     const updatedFrontmatter: SessionNoteFrontmatter = {
       ...existingNote.frontmatter,
@@ -725,6 +737,7 @@ export async function processTranscript(
         ...existingNote.frontmatter.topics_touched,
         ...appendTopics,
       ]),
+      processed: hasSubstantialNewContent ? false : existingNote.frontmatter.processed,
     };
 
     const updatedBody = existingNote.body.trimEnd() + "\n\n" + appendContent;
@@ -757,12 +770,12 @@ export async function processTranscript(
       createTopics = extracted.topics;
       createContent = extracted.content;
     } else {
-      // LLM-generated content — make API call
+      // LLM-generated content — make API call (use truncated chunk for LLM)
       if (!formattedChunk.trim()) {
         throw new Error(`Transcript chunk is empty after formatting: ${scan.transcriptPath}`);
       }
       const createOutput = await generateSessionNoteContent(
-        formattedChunk,
+        llmChunk,
         scan.transcriptPath,
         config,
         io
@@ -966,9 +979,13 @@ function extractRawMetadata(
     }
   }
 
-  // Use the formatted transcript as the note body, with a header
+  // Use the formatted transcript as the note body, with a header.
+  // Cap at 30K chars to prevent massive notes from raw transcript dumps.
   const timestamp = new Date().toISOString().split("T")[0];
-  const content = `## ${timestamp} — Raw transcript capture\n\n> This note was auto-captured before context compaction. It has not been summarized by an LLM yet.\n\n${formattedChunk}`;
+  const cappedChunk = formattedChunk.length > 30_000
+    ? formattedChunk.slice(0, 30_000) + "\n\n[... transcript truncated — full content available in raw transcript file]"
+    : formattedChunk;
+  const content = `## ${timestamp} — Raw transcript capture\n\n> This note was auto-captured before context compaction. It has not been summarized by an LLM yet.\n\n${cappedChunk}`;
 
   return { abstract, topics, content };
 }

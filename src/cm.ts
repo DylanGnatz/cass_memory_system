@@ -517,6 +517,21 @@ topic.command("remove")
   .option("-j, --json", "Output JSON")
   .action(async (slug: string, opts: any) => await topicCommand("remove", [slug], opts));
 
+topic.command("add-subpage")
+  .description("Add a sub-page to a topic")
+  .argument("<topic-slug>", "Parent topic slug")
+  .argument("<subpage-slug>", "Sub-page slug")
+  .option("--name <name>", "Display name")
+  .option("--description <text>", "What goes on this page")
+  .option("-j, --json", "Output JSON")
+  .action(async (topicSlug: string, subpageSlug: string, opts: any) => await topicCommand("add-subpage", [topicSlug, subpageSlug], opts));
+
+topic.command("generate")
+  .description("Generate knowledge page content for a topic from existing session notes")
+  .argument("<slug>", "Topic slug")
+  .option("-j, --json", "Output JSON")
+  .action(async (slug: string, opts: any) => await topicCommand("generate", [slug], opts));
+
 // --- Reflect ---
 program.command("reflect")
   .alias("ref")

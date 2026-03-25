@@ -337,7 +337,30 @@ export interface TwoCallReflectionResult {
  */
 export function formatTopicsForPrompt(topics: Topic[]): string {
   if (topics.length === 0) return "(No topics defined yet)";
-  return topics.map(t => `- ${t.slug}: ${t.name} — ${t.description}`).join("\n");
+
+  function formatTopic(t: Topic): string[] {
+    const lines = [`  - ${t.slug}: ${t.name} — ${t.description}`];
+    if (t.subpages && t.subpages.length > 0) {
+      lines.push(`    Sub-pages:`);
+      for (const sp of t.subpages) {
+        lines.push(`      - ${sp.slug}: ${sp.name} — ${sp.description}`);
+      }
+    }
+    return lines;
+  }
+
+  const userTopics = topics.filter(t => t.source === "user");
+  const systemTopics = topics.filter(t => t.source === "system");
+  const lines: string[] = [];
+  if (userTopics.length > 0) {
+    lines.push("User-defined topics (PREFERRED — always route to these when content fits):");
+    for (const t of userTopics) lines.push(...formatTopic(t));
+  }
+  if (systemTopics.length > 0) {
+    lines.push("System-suggested topics:");
+    for (const t of systemTopics) lines.push(...formatTopic(t));
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -380,7 +403,7 @@ export async function reflectOnSessionTwoCalls(
     );
 
     // Convert Call 1 bullets → PlaybookDelta "add" deltas
-    for (const bullet of call1Output.bullets) {
+    for (const bullet of call1Output.bullets || []) {
       playbookDeltas.push({
         type: "add" as const,
         bullet: {
@@ -395,7 +418,7 @@ export async function reflectOnSessionTwoCalls(
     }
 
     // Convert Call 1 topic suggestions → TopicSuggestionDelta
-    for (const ts of call1Output.topic_suggestions) {
+    for (const ts of call1Output.topic_suggestions || []) {
       knowledgeDeltas.push({
         type: "topic_suggestion" as const,
         slug: ts.slug,
@@ -415,10 +438,10 @@ export async function reflectOnSessionTwoCalls(
       timestamp: now(),
       phase: "add",
       action: "accepted",
-      reason: `Call 1: ${call1Output.bullets.length} bullets proposed (${dupsRemoved} deduped), ${call1Output.topic_suggestions.length} topic suggestions`,
+      reason: `Call 1: ${(call1Output.bullets || []).length} bullets proposed (${dupsRemoved} deduped), ${(call1Output.topic_suggestions || []).length} topic suggestions`,
       details: {
-        bulletsProposed: call1Output.bullets.length,
-        topicSuggestionsProposed: call1Output.topic_suggestions.length,
+        bulletsProposed: (call1Output.bullets || []).length,
+        topicSuggestionsProposed: (call1Output.topic_suggestions || []).length,
         duplicatesRemoved: dupsRemoved,
       },
     });
@@ -437,22 +460,12 @@ export async function reflectOnSessionTwoCalls(
   // ── Call 2: Generative/Narrative ───────────────────────────────────
 
   try {
-    // Build available topics: existing + any new suggestions from Call 1
+    // Only use existing approved topics — don't include suggestions from Call 1.
+    // Topic suggestions go to the review queue; knowledge pages are only
+    // written for topics the user has explicitly created or approved.
     const availableTopics = [...existingTopics];
-    if (call1Output) {
-      for (const ts of call1Output.topic_suggestions) {
-        if (!availableTopics.some(t => t.slug === ts.slug)) {
-          availableTopics.push({
-            slug: ts.slug,
-            name: ts.name,
-            description: ts.description,
-            source: "system" as const,
-            created: now(),
-          });
-        }
-      }
-    }
-    // Cold start fallback: ensure at least one topic
+
+    // Cold start fallback: if no topics exist at all, use a general catch-all
     if (availableTopics.length === 0) {
       availableTopics.push({
         slug: "general",

@@ -134,17 +134,18 @@ export async function orchestrateReflection(
           config.cassPath
         );
       } catch (err: any) {
+        // Don't return early — Phase 3 knowledge pipeline still needs to run
         errors.push(`Session discovery failed: ${err.message}`);
-        return { sessionsProcessed: 0, deltasGenerated: 0, errors };
       }
     }
 
     const unprocessed = sessions.filter(s => !processedLog.has(s));
-    if (unprocessed.length === 0) {
-      return { sessionsProcessed: 0, deltasGenerated: 0, errors };
-    }
 
-    options.onProgress?.({ phase: "discovery", totalSessions: unprocessed.length });
+    // Note: don't return early if unprocessed is empty — the Phase 3 knowledge
+    // pipeline below also needs to run for session notes with processed: false.
+    if (unprocessed.length > 0) {
+      options.onProgress?.({ phase: "discovery", totalSessions: unprocessed.length });
+    }
 
     // 4. Reflection Phase (LLM) - Done WITHOUT holding playbook locks
     const allDeltas: PlaybookDelta[] = [];
@@ -263,28 +264,27 @@ export async function orchestrateReflection(
       }
     }
 
-    if (options.dryRun) {
-      return {
-        sessionsProcessed,
-        deltasGenerated: allDeltas.length,
-        dryRunDeltas: allDeltas,
-        errors
-      };
-    }
+    let dryRunDeltas: PlaybookDelta[] | undefined;
 
-    if (allDeltas.length === 0) {
+    if (options.dryRun) {
+      dryRunDeltas = allDeltas;
+      // Don't return — Phase 3 knowledge pipeline still needs to run below
+    } else if (allDeltas.length === 0) {
       // Even if no deltas were generated, we should still mark sessions as processed
       // (e.g., empty sessions or sessions with no insights) to avoid infinite loops.
       if (pendingProcessedEntries.length > 0) {
         await processedLog.appendBatch(pendingProcessedEntries);
       }
-      return { sessionsProcessed, deltasGenerated: 0, errors };
+      // Don't return — Phase 3 knowledge pipeline still needs to run below
     }
 
     // 5. Merge Phase: Lock Playbooks, Reload, Curate, Save
     // We lock Global first, then Repo (if exists) to prevent deadlocks.
     let globalResult: CurationResult | undefined;
     let repoResult: CurationResult | undefined;
+    let autoOutcome: ReflectionOutcome["autoOutcome"] | undefined;
+
+   if (!options.dryRun && allDeltas.length > 0) {
 
     const performMerge = async () => {
       // Reload fresh playbooks under lock
@@ -418,7 +418,6 @@ export async function orchestrateReflection(
     }
 
     // 6. Auto-record rule outcomes (post-merge, best-effort)
-    let autoOutcome: ReflectionOutcome["autoOutcome"] | undefined;
     if (pendingOutcomes.length > 0) {
       try {
         const records = [];
@@ -452,6 +451,8 @@ export async function orchestrateReflection(
         inlineFeedbackDeltas: inlineFeedbackDeltaCount,
       };
     }
+
+    } // end if (!options.dryRun && allDeltas.length > 0)
 
     // ========================================================================
     // PHASE 3: KNOWLEDGE REFLECTION PIPELINE
@@ -556,24 +557,42 @@ export async function orchestrateReflection(
             const dbPath = expandPath(config.searchDbPath);
             const searchIndex = openSearchIndex(dbPath);
             try {
-              // Re-index knowledge pages
+              // Re-index knowledge pages (supports both directory model and legacy flat files)
               const knowledgeDir = expandPath(config.knowledgeDir);
-              const knowledgeFiles = await fs.readdir(knowledgeDir).catch(() => [] as string[]);
-              for (const file of knowledgeFiles) {
-                if (!file.endsWith(".md")) continue;
-                try {
-                  const raw = await fs.readFile(path.join(knowledgeDir, file), "utf-8");
-                  const { parseKnowledgePage } = await import("./knowledge-page.js");
-                  const page = parseKnowledgePage(raw);
-                  for (const section of page.sections) {
-                    searchIndex.indexKnowledge({
-                      topic: page.frontmatter.topic,
-                      section_title: section.title,
-                      content: section.content,
-                    });
+              const { parseKnowledgePage } = await import("./knowledge-page.js");
+              const entries = await fs.readdir(knowledgeDir, { withFileTypes: true }).catch(() => []);
+              for (const entry of entries) {
+                if (entry.isDirectory()) {
+                  // Directory model: knowledge/{slug}/*.md
+                  const subDir = path.join(knowledgeDir, entry.name);
+                  const subFiles = await fs.readdir(subDir).catch(() => [] as string[]);
+                  for (const subFile of subFiles) {
+                    if (!subFile.endsWith(".md")) continue;
+                    try {
+                      const raw = await fs.readFile(path.join(subDir, subFile), "utf-8");
+                      const page = parseKnowledgePage(raw);
+                      for (const section of page.sections) {
+                        searchIndex.indexKnowledge({
+                          topic: `${entry.name}/${subFile.replace(".md", "")}`,
+                          section_title: section.title,
+                          content: section.content,
+                        });
+                      }
+                    } catch { /* skip malformed */ }
                   }
-                } catch {
-                  // Skip malformed pages
+                } else if (entry.name.endsWith(".md")) {
+                  // Legacy flat file: knowledge/{slug}.md
+                  try {
+                    const raw = await fs.readFile(path.join(knowledgeDir, entry.name), "utf-8");
+                    const page = parseKnowledgePage(raw);
+                    for (const section of page.sections) {
+                      searchIndex.indexKnowledge({
+                        topic: page.frontmatter.topic,
+                        section_title: section.title,
+                        content: section.content,
+                      });
+                    }
+                  } catch { /* skip malformed */ }
                 }
               }
 
@@ -644,6 +663,7 @@ export async function orchestrateReflection(
     return {
       sessionsProcessed,
       deltasGenerated: allDeltas.length,
+      dryRunDeltas,
       globalResult,
       repoResult,
       errors,

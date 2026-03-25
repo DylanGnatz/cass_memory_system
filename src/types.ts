@@ -426,6 +426,17 @@ export const ConfigSchema = z.object({
   knowledgePageBloatThreshold: z.number().default(5000),
   staleTopicIgnoreDays: z.number().default(30),
   transcriptRetentionDays: z.number().default(30),
+
+  // Per-step model overrides for cost optimization.
+  // Extractive tasks use Haiku (cheap), generative tasks use Sonnet (quality).
+  pipelineModels: z.object({
+    sessionNoteCreate: z.string().default("claude-haiku-4-5-20251001"),
+    sessionNoteExtend: z.string().default("claude-haiku-4-5-20251001"),
+    diaryFromNote: z.string().default("claude-haiku-4-5-20251001"),
+    reflectorCall1: z.string().default("claude-haiku-4-5-20251001"),
+    reflectorCall2: z.string().default(""), // empty = use config.model (Sonnet)
+    knowledgeGen: z.string().default(""),   // empty = use config.model (Sonnet)
+  }).default({}),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
@@ -594,11 +605,25 @@ export const UserFlagItemSchema = z.object({
   reason: z.string().optional(),
 });
 
+export const TopicSuggestionItemSchema = z.object({
+  id: z.string(),
+  type: z.literal("topic_suggestion"),
+  status: ReviewQueueStatusEnum.default("pending"),
+  created: z.string(),
+  target_topic: z.string(),
+  data: z.object({
+    name: z.string(),
+    description: z.string(),
+    suggested_from_session: z.string(),
+  }),
+});
+
 export const ReviewQueueItemSchema = z.discriminatedUnion("type", [
   ColdStartSuggestionItemSchema,
   BloatedPageItemSchema,
   StaleTopicItemSchema,
   UserFlagItemSchema,
+  TopicSuggestionItemSchema,
 ]);
 export type ReviewQueueItem = z.infer<typeof ReviewQueueItemSchema>;
 
@@ -1039,12 +1064,20 @@ export type TopicSource = z.infer<typeof TopicSourceEnum>;
 
 // --- Topic ---
 
+export const SubPageSchema = z.object({
+  slug: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string(),
+});
+export type SubPage = z.infer<typeof SubPageSchema>;
+
 export const TopicSchema = z.object({
   slug: z.string().min(1),
   name: z.string().min(1),
   description: z.string(),
   source: TopicSourceEnum,
   created: z.string(), // ISO 8601
+  subpages: z.array(SubPageSchema).default([]),
 });
 export type Topic = z.infer<typeof TopicSchema>;
 
@@ -1117,6 +1150,7 @@ export type TopicSuggestion = z.infer<typeof TopicSuggestionSchema>;
 export const KnowledgePageAppendDeltaSchema = z.object({
   type: z.literal("knowledge_page_append"),
   topic_slug: z.string().min(1),
+  sub_page: z.string().default("_index"), // which sub-page to append to
   section_id: z.string().min(1),
   section_title: z.string(),
   content: z.string(),
@@ -1162,13 +1196,13 @@ export const ReflectorCall1OutputSchema = z.object({
     type: BulletTypeEnum,
     kind: BulletKindEnum,
     reasoning: z.string(), // why this bullet is worth extracting
-  })),
+  })).default([]),
   topic_suggestions: z.array(z.object({
     slug: z.string().min(1),
     name: z.string().min(1),
     description: z.string(),
     reasoning: z.string(), // why this topic should exist
-  })),
+  })).default([]),
 });
 export type ReflectorCall1Output = z.infer<typeof ReflectorCall1OutputSchema>;
 
@@ -1176,6 +1210,7 @@ export type ReflectorCall1Output = z.infer<typeof ReflectorCall1OutputSchema>;
 export const ReflectorCall2OutputSchema = z.object({
   knowledge_sections: z.array(z.object({
     topic_slug: z.string().min(1),
+    sub_page: z.string().default("_index"), // which sub-page to write to
     section_title: z.string().min(1),
     content: z.string().min(1), // prose paragraph(s)
     confidence: ConfidenceTierEnum,
@@ -1272,6 +1307,7 @@ export const Schemas = {
   CommandResult: CommandResultSchema,
   AuditResult: AuditResultSchema,
   // Knowledge system (Phase 1)
+  SubPage: SubPageSchema,
   Topic: TopicSchema,
   TopicsFile: TopicsFileSchema,
   SessionNote: SessionNoteSchema,

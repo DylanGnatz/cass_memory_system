@@ -117,9 +117,18 @@ export async function dismissReviewItem(id: string, config: Config): Promise<boo
   return updateItemStatus(id, "dismissed", config);
 }
 
-/** Approve a review queue item. */
-export async function approveReviewItem(id: string, config: Config): Promise<boolean> {
-  return updateItemStatus(id, "approved", config);
+/**
+ * Approve a review queue item.
+ * For topic_suggestion items, returns the item data so the caller can create the topic.
+ */
+export async function approveReviewItem(id: string, config: Config): Promise<{ approved: boolean; item?: ReviewQueueItem }> {
+  const queue = await loadReviewQueue(config);
+  const item = queue.items.find(i => i.id === id);
+  if (!item) return { approved: false };
+
+  (item as any).status = "approved";
+  await saveReviewQueue(queue, config);
+  return { approved: true, item };
 }
 
 /**

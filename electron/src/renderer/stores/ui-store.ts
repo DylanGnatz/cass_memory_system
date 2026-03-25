@@ -4,12 +4,13 @@ export type SidebarTab = 'encyclopedia' | 'recent' | 'starred' | 'notes' | 'revi
 
 export type ContentView =
   | { type: 'none' }
-  | { type: 'knowledge'; slug: string }
+  | { type: 'knowledge'; slug: string; subPage?: string }
   | { type: 'session'; id: string }
   | { type: 'digest'; date: string }
   | { type: 'search' }
   | { type: 'user-note'; id: string }
   | { type: 'review-queue' }
+  | { type: 'settings' }
 
 interface DialogState {
   type: 'invalidate' | 'flag'
@@ -22,6 +23,8 @@ interface UIState {
   // Sidebar
   activeTab: SidebarTab
   setActiveTab: (tab: SidebarTab) => void
+  sidebarWidth: number
+  setSidebarWidth: (width: number) => void
 
   // Content
   currentView: ContentView
@@ -54,6 +57,8 @@ interface UIState {
 export const useUIStore = create<UIState>((set) => ({
   activeTab: 'encyclopedia',
   setActiveTab: (tab) => set({ activeTab: tab }),
+  sidebarWidth: 260,
+  setSidebarWidth: (width) => set({ sidebarWidth: Math.max(180, Math.min(500, width)) }),
 
   currentView: { type: 'none' },
   navigate: (view) => set({ currentView: view, isEditing: false }),

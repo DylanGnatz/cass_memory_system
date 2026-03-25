@@ -2,7 +2,8 @@
 // CLI command for topic management: add, list, remove.
 
 import { loadConfig } from "../config.js";
-import { addTopic, removeTopic, listTopicsWithMetadata, coldStartTopic } from "../knowledge-page.js";
+import { addTopic, removeTopic, listTopicsWithMetadata, coldStartTopic, addSubPage, loadTopics } from "../knowledge-page.js";
+import { generateKnowledgePage } from "../knowledge-gen.js";
 import type { TopicSource } from "../types.js";
 
 export async function topicCommand(
@@ -95,8 +96,57 @@ export async function topicCommand(
       break;
     }
 
+    case "add-subpage": {
+      const topicSlug = args[0];
+      const subPageSlug = args[1];
+      if (!topicSlug || !subPageSlug) {
+        const msg = "Usage: cm topic add-subpage <topic-slug> <subpage-slug> --name <name> --description <description>";
+        if (json) console.log(JSON.stringify({ success: false, error: msg }));
+        else console.error(msg);
+        return;
+      }
+      const name = opts.name || subPageSlug;
+      const description = opts.description || "";
+
+      const result = await addSubPage(topicSlug, subPageSlug, name, description, config);
+      if (json) {
+        console.log(JSON.stringify({ success: result.added, ...result }));
+      } else {
+        console.log(result.reason);
+      }
+      break;
+    }
+
+    case "generate": {
+      const slug = args[0];
+      if (!slug) {
+        const msg = "Usage: cm topic generate <topic-slug>";
+        if (json) console.log(JSON.stringify({ success: false, error: msg }));
+        else console.error(msg);
+        return;
+      }
+
+      const topics = await loadTopics(config);
+      const topic = topics.find(t => t.slug === slug);
+      if (!topic) {
+        const msg = `Topic "${slug}" not found`;
+        if (json) console.log(JSON.stringify({ success: false, error: msg }));
+        else console.error(msg);
+        return;
+      }
+
+      if (!json) console.log(`Generating knowledge page for "${slug}"...`);
+      const result = await generateKnowledgePage(topic, config);
+      if (json) {
+        console.log(JSON.stringify({ success: true, ...result }));
+      } else {
+        console.log(`Generated ${result.sectionsGenerated} sections for "${slug}"`);
+      }
+      break;
+    }
+
     default: {
-      const msg = `Unknown topic subcommand: ${subcommand}. Use add, list, or remove.`;
+      const msg = `Unknown topic subcommand: ${subcommand}. Use add, list, remove, add-subpage, or generate.`;
       if (json) console.log(JSON.stringify({ success: false, error: msg }));
       else console.error(msg);
     }

@@ -191,35 +191,67 @@ export function serializeKnowledgePage(page: ParsedKnowledgePage): string {
 }
 
 // ============================================================================
-// FILE I/O
+// FILE I/O — Directory Model
+// Each topic is a directory: knowledge/{topic-slug}/
+//   _index.md — topic overview
+//   {sub-page}.md — user-defined sub-pages
 // ============================================================================
 
-/** Resolve path for a knowledge page file. */
+/** Resolve the directory path for a topic. */
+export function topicDirPath(topicSlug: string, config: Config): string {
+  return path.join(expandPath(config.knowledgeDir), topicSlug);
+}
+
+/** Resolve the file path for a sub-page within a topic directory. */
+export function subPagePath(topicSlug: string, subPage: string, config: Config): string {
+  const slug = subPage.endsWith(".md") ? subPage : `${subPage}.md`;
+  return path.join(topicDirPath(topicSlug, config), slug);
+}
+
+/** Backward compat: resolve path for old single-file format. */
 export function knowledgePagePath(topicSlug: string, config: Config): string {
   return path.join(expandPath(config.knowledgeDir), `${topicSlug}.md`);
 }
 
-/** Load and parse a knowledge page. Returns null if file doesn't exist. */
+/**
+ * Load and parse a knowledge page (sub-page or legacy single file).
+ * Tries directory model first, falls back to single-file for backward compat.
+ */
 export async function loadKnowledgePage(
   topicSlug: string,
-  config: Config
+  config: Config,
+  subPage?: string
 ): Promise<ParsedKnowledgePage | null> {
-  const filePath = knowledgePagePath(topicSlug, config);
+  const sub = subPage || "_index";
+  // Try directory model first
+  const dirPath = subPagePath(topicSlug, sub, config);
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
+    const raw = await fs.readFile(dirPath, "utf-8");
     return parseKnowledgePage(raw);
   } catch {
+    // Fall back to legacy single-file model
+    if (!subPage || subPage === "_index") {
+      const legacyPath = knowledgePagePath(topicSlug, config);
+      try {
+        const raw = await fs.readFile(legacyPath, "utf-8");
+        return parseKnowledgePage(raw);
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
 }
 
-/** Write a knowledge page with locking + atomic write. */
+/** Write a knowledge page to a sub-page within a topic directory. */
 export async function writeKnowledgePage(
   topicSlug: string,
   page: ParsedKnowledgePage,
-  config: Config
+  config: Config,
+  subPage?: string
 ): Promise<string> {
-  const filePath = knowledgePagePath(topicSlug, config);
+  const sub = subPage || "_index";
+  const filePath = subPagePath(topicSlug, sub, config);
   await ensureDir(path.dirname(filePath));
   const content = serializeKnowledgePage(page);
   await withLock(filePath, async () => {
@@ -228,33 +260,89 @@ export async function writeKnowledgePage(
   return filePath;
 }
 
+/** List all sub-page files in a topic directory. Returns slugs (without .md). */
+export async function listSubPages(topicSlug: string, config: Config): Promise<string[]> {
+  const dirPath = topicDirPath(topicSlug, config);
+  try {
+    const files = await fs.readdir(dirPath);
+    return files
+      .filter(f => f.endsWith(".md"))
+      .map(f => f.replace(".md", ""))
+      .sort((a, b) => {
+        // _index always first
+        if (a === "_index") return -1;
+        if (b === "_index") return 1;
+        return a.localeCompare(b);
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** Create a topic directory with _index.md. */
+export async function createTopicDirectory(
+  topic: Topic,
+  config: Config
+): Promise<string> {
+  const dirPath = topicDirPath(topic.slug, config);
+  await ensureDir(dirPath);
+
+  const today = new Date().toISOString().split("T")[0];
+  const indexPage: ParsedKnowledgePage = {
+    frontmatter: {
+      topic: topic.name,
+      description: topic.description,
+      source: topic.source,
+      created: today,
+      last_updated: today,
+    },
+    sections: [],
+    raw: "",
+  };
+
+  await writeKnowledgePage(topic.slug, indexPage, config, "_index");
+  log(`Created topic directory: ${topic.slug}/`);
+  return dirPath;
+}
+
 /**
- * Append a section to a knowledge page. Creates the page if it doesn't exist.
+ * Append a section to a knowledge page sub-page. Creates the file if it doesn't exist.
  * Uses source-session-ID dedup: if a section from the same source session already
  * exists, skip (different sources always kept — user merges via review queue).
+ *
+ * Only appends to EXISTING topics. Returns { written: false } if topic not in topics.json.
  */
 export async function appendSectionToPage(
   delta: KnowledgePageAppendDelta,
   topic: Topic | undefined,
   config: Config
 ): Promise<{ written: boolean; reason: string }> {
-  let page = await loadKnowledgePage(delta.topic_slug, config);
+  // Only write to existing topics — don't create orphaned pages
+  if (!topic) {
+    return {
+      written: false,
+      reason: `Topic "${delta.topic_slug}" not in topics.json — skipping (topic must be approved first)`,
+    };
+  }
+
+  const subPage = delta.sub_page || "_index";
+  let page = await loadKnowledgePage(delta.topic_slug, config, subPage);
 
   if (!page) {
-    // Create new page
+    // Create new sub-page
     const today = new Date().toISOString().split("T")[0];
     page = {
       frontmatter: {
-        topic: topic?.name || delta.topic_slug,
-        description: topic?.description || "",
-        source: topic?.source || "system",
+        topic: topic.name,
+        description: topic.description,
+        source: topic.source,
         created: today,
         last_updated: today,
       },
       sections: [],
       raw: "",
     };
-    log(`Creating new knowledge page: ${delta.topic_slug}`);
+    log(`Creating new sub-page: ${delta.topic_slug}/${subPage}`);
   }
 
   // Source-session-ID dedup: same source → skip
@@ -264,7 +352,7 @@ export async function appendSectionToPage(
   if (existingFromSameSource) {
     return {
       written: false,
-      reason: `Section "${delta.section_title}" from ${delta.source_session} already exists on ${delta.topic_slug}`,
+      reason: `Section "${delta.section_title}" from ${delta.source_session} already exists on ${delta.topic_slug}/${subPage}`,
     };
   }
 
@@ -282,8 +370,8 @@ export async function appendSectionToPage(
   page.sections.push(newSection);
   page.frontmatter.last_updated = new Date().toISOString().split("T")[0];
 
-  await writeKnowledgePage(delta.topic_slug, page, config);
-  log(`Appended section "${delta.section_title}" to ${delta.topic_slug}`);
+  await writeKnowledgePage(delta.topic_slug, page, config, subPage);
+  log(`Appended section "${delta.section_title}" to ${delta.topic_slug}/${subPage}`);
 
   return { written: true, reason: "Section appended" };
 }
@@ -314,7 +402,13 @@ export async function saveTopics(topics: Topic[], config: Config): Promise<void>
   });
 }
 
-/** Add a topic suggestion to topics.json if the slug doesn't already exist. */
+/**
+ * Queue a topic suggestion for user review instead of auto-creating it.
+ * The topic is added to the review queue as a "topic_suggestion" item.
+ * Knowledge pages may still be written to knowledge/{slug}.md (orphaned from topics.json)
+ * — they become visible when the user approves the topic.
+ * On dismiss, the orphaned knowledge page can be cleaned up.
+ */
 export async function addTopicSuggestion(
   slug: string,
   name: string,
@@ -328,17 +422,19 @@ export async function addTopicSuggestion(
     return { added: false, reason: `Topic "${slug}" already exists` };
   }
 
-  topics.push({
-    slug,
-    name,
-    description,
-    source: "system",
-    created: new Date().toISOString().split("T")[0],
-  });
+  // Queue for review instead of auto-creating
+  const item: ReviewQueueItem = {
+    id: `rq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    type: "topic_suggestion",
+    status: "pending",
+    created: new Date().toISOString(),
+    target_topic: slug,
+    data: { name, description, suggested_from_session: suggestedFromSession },
+  };
 
-  await saveTopics(topics, config);
-  log(`Added topic suggestion: ${slug}`);
-  return { added: true, reason: "Topic added" };
+  await appendReviewItems([item], config);
+  log(`Queued topic suggestion for review: ${slug}`);
+  return { added: true, reason: "Topic queued for review" };
 }
 
 // ============================================================================
@@ -370,17 +466,67 @@ export async function addTopic(
     return { added: false, reason: `Topic "${slug}" already exists` };
   }
 
-  topics.push({
+  const topic: Topic = {
     slug,
     name,
     description,
     source,
     created: new Date().toISOString(),
-  });
+    subpages: [],
+  };
 
+  topics.push(topic);
   await saveTopics(topics, config);
+
+  // Create topic directory with _index.md
+  await createTopicDirectory(topic, config);
+
   log(`Added topic: ${slug} (${source})`);
   return { added: true, reason: "Topic added" };
+}
+
+/**
+ * Add a sub-page to an existing topic.
+ * Creates the sub-page definition in topics.json and the .md file.
+ */
+export async function addSubPage(
+  topicSlug: string,
+  subPageSlug: string,
+  name: string,
+  description: string,
+  config: Config
+): Promise<{ added: boolean; reason: string }> {
+  const topics = await loadTopics(config);
+  const topic = topics.find(t => t.slug === topicSlug);
+
+  if (!topic) {
+    return { added: false, reason: `Topic "${topicSlug}" not found` };
+  }
+
+  if (topic.subpages.some(sp => sp.slug === subPageSlug)) {
+    return { added: false, reason: `Sub-page "${subPageSlug}" already exists in "${topicSlug}"` };
+  }
+
+  topic.subpages.push({ slug: subPageSlug, name, description });
+  await saveTopics(topics, config);
+
+  // Create the sub-page .md file
+  const today = new Date().toISOString().split("T")[0];
+  const page: ParsedKnowledgePage = {
+    frontmatter: {
+      topic: name,
+      description,
+      source: topic.source,
+      created: today,
+      last_updated: today,
+    },
+    sections: [],
+    raw: "",
+  };
+  await writeKnowledgePage(topicSlug, page, config, subPageSlug);
+
+  log(`Added sub-page: ${topicSlug}/${subPageSlug}`);
+  return { added: true, reason: "Sub-page added" };
 }
 
 /**
@@ -418,17 +564,45 @@ export async function listTopicsWithMetadata(config: Config): Promise<Array<{
   sectionCount: number;
   lastUpdated: string | null;
   wordCount: number;
+  subPageCount: number;
 }>> {
   const topics = await loadTopics(config);
   const results = [];
 
   for (const topic of topics) {
-    const page = await loadKnowledgePage(topic.slug, config);
+    let totalSections = 0;
+    let totalWords = 0;
+    let latestUpdate: string | null = null;
+
+    // Read all sub-pages in the topic directory
+    const subPages = await listSubPages(topic.slug, config);
+    for (const sp of subPages) {
+      const page = await loadKnowledgePage(topic.slug, config, sp);
+      if (page) {
+        totalSections += page.sections.length;
+        totalWords += page.sections.reduce((sum, s) => sum + s.content.split(/\s+/).length, 0);
+        if (page.frontmatter.last_updated && (!latestUpdate || page.frontmatter.last_updated > latestUpdate)) {
+          latestUpdate = page.frontmatter.last_updated;
+        }
+      }
+    }
+
+    // Fallback: check legacy single-file format
+    if (subPages.length === 0) {
+      const page = await loadKnowledgePage(topic.slug, config);
+      if (page) {
+        totalSections = page.sections.length;
+        totalWords = page.sections.reduce((sum, s) => sum + s.content.split(/\s+/).length, 0);
+        latestUpdate = page.frontmatter.last_updated || null;
+      }
+    }
+
     results.push({
       topic,
-      sectionCount: page?.sections.length ?? 0,
-      lastUpdated: page?.frontmatter.last_updated ?? null,
-      wordCount: page ? page.sections.reduce((sum, s) => sum + s.content.split(/\s+/).length, 0) : 0,
+      sectionCount: totalSections,
+      lastUpdated: latestUpdate,
+      wordCount: totalWords,
+      subPageCount: subPages.length,
     });
   }
 

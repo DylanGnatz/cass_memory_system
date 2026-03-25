@@ -1,7 +1,7 @@
 // CLI bridge — shell out to `bun run src/cm.ts` for mutations.
 // Reuses all existing validation, locking, and atomicWrite safety.
 
-import { spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import path from 'node:path'
 import os from 'node:os'
 import type { ReflectionResult } from './types'
@@ -31,55 +31,46 @@ interface CliResult {
 
 /** Run a CLI command and return parsed JSON output + stderr. */
 async function runCli(args: string[]): Promise<CliResult> {
+  const enhancedEnv = { ...process.env, PATH: getBunEnhancedPath() }
+
+  console.log('[cli-bridge] Running:', 'bun', 'run', CM_PATH, ...args, '--json')
+
   return new Promise((resolve, reject) => {
-    const enhancedEnv = { ...process.env, PATH: getBunEnhancedPath() }
-
-    console.log('[cli-bridge] Running:', 'bun', 'run', CM_PATH, ...args, '--json')
-    console.log('[cli-bridge] CWD:', REPO_ROOT)
-
-    const proc = spawn('bun', ['run', CM_PATH, ...args, '--json'], {
+    execFile('bun', ['run', CM_PATH, ...args, '--json'], {
       cwd: REPO_ROOT,
       env: enhancedEnv,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-
-    let stdout = ''
-    let stderr = ''
-
-    proc.stdout.on('data', (data: Buffer) => {
-      stdout += data.toString()
-    })
-
-    proc.stderr.on('data', (data: Buffer) => {
-      stderr += data.toString()
-    })
-
-    proc.on('close', (code) => {
-      console.log(`[cli-bridge] Process exited with code ${code}`)
+      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large JSON output
+    }, (error, stdout, stderr) => {
       if (stderr) console.log('[cli-bridge] stderr:', stderr.slice(0, 500))
-      if (code !== 0) {
-        reject(new Error(`CLI exited with code ${code}: ${stderr || stdout}`))
+
+      if (error && error.code !== 0) {
+        reject(new Error(`CLI failed: ${stderr || error.message}`))
         return
       }
 
-      try {
-        // Parse the last JSON object from stdout (CLI may emit progress before final result)
-        const lines = stdout.trim().split('\n')
-        for (let i = lines.length - 1; i >= 0; i--) {
-          try {
-            const parsed = JSON.parse(lines[i])
-            resolve({ data: parsed, stderr })
-            return
-          } catch { /* not JSON, try previous line */ }
-        }
-        resolve({ data: { raw: stdout }, stderr })
-      } catch {
-        resolve({ data: { raw: stdout }, stderr })
-      }
-    })
+      const trimmed = (stdout || '').trim()
+      console.log('[cli-bridge] stdout length:', trimmed.length)
 
-    proc.on('error', (err) => {
-      reject(new Error(`Failed to spawn CLI: ${err.message}`))
+      // Try parsing the full output as JSON
+      try {
+        const parsed = JSON.parse(trimmed)
+        resolve({ data: parsed, stderr: stderr || '' })
+        return
+      } catch { /* not pure JSON */ }
+
+      // Extract JSON object from first { to last }
+      const firstBrace = trimmed.indexOf('{')
+      const lastBrace = trimmed.lastIndexOf('}')
+      if (firstBrace >= 0 && lastBrace > firstBrace) {
+        try {
+          const parsed = JSON.parse(trimmed.slice(firstBrace, lastBrace + 1))
+          resolve({ data: parsed, stderr: stderr || '' })
+          return
+        } catch { /* extraction failed */ }
+      }
+
+      console.log('[cli-bridge] Could not parse JSON, first 200 chars:', trimmed.slice(0, 200))
+      resolve({ data: { raw: trimmed }, stderr: stderr || '' })
     })
   })
 }
@@ -126,6 +117,22 @@ export async function cliRunReflection(): Promise<ReflectionResult> {
     return {
       success: false,
       message: err.message || 'Reflection failed'
+    }
+  }
+}
+
+export async function cliGenerateTopicKnowledge(slug: string): Promise<{ success: boolean; sectionsGenerated?: number; message: string }> {
+  try {
+    const { data: result } = await runCli(['topic', 'generate', slug])
+    return {
+      success: true,
+      sectionsGenerated: result?.sectionsGenerated || 0,
+      message: `Generated ${result?.sectionsGenerated || 0} sections`
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err.message || 'Generation failed'
     }
   }
 }
