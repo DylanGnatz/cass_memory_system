@@ -4,7 +4,7 @@
  * This module provides persistence for onboarding progress, enabling agents
  * to resume where they left off if their context window fills up mid-onboarding.
  *
- * State is stored in ~/.cass-memory/onboarding-state.json
+ * State is stored in ~/.memory-system/onboarding-state.json
  */
 
 import fs from "node:fs/promises";

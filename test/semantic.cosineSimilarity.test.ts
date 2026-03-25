@@ -155,7 +155,7 @@ describe("semantic: formatSemanticModeMessage", () => {
       enabled: false,
       available: false,
       reason: "Semantic search is disabled in config",
-      enableHint: "Set semanticSearchEnabled: true in ~/.cass-memory/config.yaml",
+      enableHint: "Set semanticSearchEnabled: true in ~/.memory-system/config.yaml",
       model: "Xenova/all-MiniLM-L6-v2",
     };
     const message = formatSemanticModeMessage("keyword", status);

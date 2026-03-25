@@ -97,9 +97,15 @@ describe("generateSimilarResults input validation", () => {
 });
 
 describe("E2E: CLI similar command", () => {
-  it("returns relevant bullets in keyword mode (semanticSearchEnabled default false)", async () => {
+  it("returns relevant bullets in keyword mode (semanticSearchEnabled explicitly false)", async () => {
     await withTempCassHome(async (env) => {
       const query = "handle jwt authentication errors";
+
+      // Explicitly disable semantic search to force keyword mode
+      await writeFile(
+        env.configPath,
+        JSON.stringify({ semanticSearchEnabled: false }, null, 2)
+      );
 
       const playbook = createTestPlaybook([
         createBullet({
@@ -178,6 +184,10 @@ describe("E2E: CLI similar command", () => {
   it("prints JSON with mode + results when --json is set", async () => {
     await withTempCassHome(async (env) => {
       const query = "handle jwt authentication errors";
+
+      // Force keyword mode for deterministic test (no model downloads)
+      await writeFile(env.configPath, JSON.stringify({ semanticSearchEnabled: false }, null, 2));
+
       const playbook = createTestPlaybook([
         createBullet({ id: "b-jwt", content: "Handle jwt authentication errors gracefully", category: "security" }),
       ]);
@@ -206,6 +216,10 @@ describe("E2E: CLI similar command", () => {
   it("prints JSON when --format json is set (even without --json)", async () => {
     await withTempCassHome(async (env) => {
       const query = "handle jwt authentication errors";
+
+      // Force keyword mode for deterministic test (no model downloads)
+      await writeFile(env.configPath, JSON.stringify({ semanticSearchEnabled: false }, null, 2));
+
       const playbook = createTestPlaybook([
         createBullet({ id: "b-jwt", content: "Handle jwt authentication errors gracefully", category: "security" }),
       ]);

@@ -81,9 +81,9 @@ describe("playbook get command", () => {
       const playbook = createTestPlaybook([bullet]);
       await savePlaybookToPath(playbook, playbookPath);
 
-      const configPath = path.join(dir, ".cass-memory", "config.json");
+      const configPath = path.join(dir, ".memory-system", "config.json");
       const { mkdir } = await import("node:fs/promises");
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
       await writeFile(configPath, JSON.stringify(config, null, 2));
       process.env.HOME = dir;
@@ -115,9 +115,9 @@ describe("playbook get command", () => {
       await savePlaybookToPath(playbook, playbookPath);
 
       const { mkdir } = await import("node:fs/promises");
-      await mkdir(path.join(dir, ".cass-memory"), { recursive: true });
+      await mkdir(path.join(dir, ".memory-system"), { recursive: true });
       const config = createTestConfig({ playbookPath });
-      await writeFile(path.join(dir, ".cass-memory", "config.json"), JSON.stringify(config, null, 2));
+      await writeFile(path.join(dir, ".memory-system", "config.json"), JSON.stringify(config, null, 2));
       process.env.HOME = dir;
 
       const capture = captureConsole();

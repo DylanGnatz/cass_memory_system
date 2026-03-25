@@ -24,7 +24,6 @@ import { SECRET_PATTERNS, compileExtraPatterns } from "../sanitize.js";
 import { loadPlaybook, savePlaybook, createEmptyPlaybook } from "../playbook.js";
 import { withLock } from "../lock.js";
 import { Config, Playbook, ErrorCode } from "../types.js";
-import { loadTraumas } from "../trauma.js";
 import chalk from "chalk";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -233,7 +232,7 @@ function buildRecommendedActions(params: {
   }
 
   const globalStorage = params.checks.find(
-    (c) => c.category === "Global Storage (~/.cass-memory)" && c.item === "Structure"
+    (c) => c.category === "Global Storage (~/.memory-system)" && c.item === "Structure"
   );
   if (globalStorage?.status === "warn") {
     actions.push({
@@ -318,7 +317,7 @@ async function computeDoctorChecks(
   if (!globalDiaryExists) missingGlobal.push("diary/");
 
   checks.push({
-    category: "Global Storage (~/.cass-memory)",
+    category: "Global Storage (~/.memory-system)",
     item: "Structure",
     status: missingGlobal.length === 0 ? "pass" : "warn",
     message: missingGlobal.length === 0 ? "All global files found" : `Missing: ${missingGlobal.join(", ")}`,
@@ -532,38 +531,6 @@ async function computeDoctorChecks(
         extraMatches: extraResult.matches,
         falsePositiveRate,
       },
-    });
-  }
-
-  // 6) Trauma System (Project Hot Stove)
-  try {
-    const traumas = await loadTraumas();
-    checks.push({
-      category: "Trauma System",
-      item: "Database",
-      status: "pass",
-      message: `Loaded ${traumas.length} trauma patterns`,
-      details: { count: traumas.length },
-    });
-  } catch (e) {
-    checks.push({
-      category: "Trauma System",
-      item: "Database",
-      status: "warn",
-      message: `Failed to load trauma database: ${e instanceof Error ? e.message : String(e)}`,
-    });
-  }
-
-  if (await fileExists(".claude")) {
-    const guardPath = ".claude/hooks/trauma_guard.py";
-    const guardExists = await fileExists(guardPath);
-    checks.push({
-      category: "Trauma System",
-      item: "Safety Guard",
-      status: guardExists ? "pass" : "warn",
-      message: guardExists
-        ? "Guard installed in .claude/hooks"
-        : "Guard NOT installed in .claude/hooks (run 'cm guard --install')",
     });
   }
 

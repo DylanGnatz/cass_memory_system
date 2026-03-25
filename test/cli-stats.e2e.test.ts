@@ -109,7 +109,7 @@ function createTestBullet(overrides: Partial<{
 async function setupTestEnvironment(bullets: any[] = []) {
   const dir = await createTempDir();
   const home = path.join(dir, "home");
-  const cassMemoryDir = path.join(home, ".cass-memory");
+  const cassMemoryDir = path.join(home, ".memory-system");
 
   await mkdir(cassMemoryDir, { recursive: true });
   await mkdir(path.join(cassMemoryDir, "diary"), { recursive: true });

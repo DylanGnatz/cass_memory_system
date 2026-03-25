@@ -71,7 +71,7 @@ async function setupTestEnvironment() {
   const dir = await createTempDir();
   const home = path.join(dir, "home");
   const repo = path.join(dir, "repo");
-  const cassMemoryDir = path.join(home, ".cass-memory");
+  const cassMemoryDir = path.join(home, ".memory-system");
   const repoCassDir = path.join(repo, ".cass");
 
   await mkdir(cassMemoryDir, { recursive: true });

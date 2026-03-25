@@ -13,12 +13,18 @@ import {
   warn,
   error as logError,
   reportError,
+  expandPath,
   validateNonEmptyString,
   validateOneOf,
   validatePositiveInt,
 } from "../utils.js";
 import { analyzeScoreDistribution, getEffectiveScore, isStale } from "../scoring.js";
 import { ErrorCode, type PlaybookBullet } from "../types.js";
+import { openSearchIndex } from "../search.js";
+import { loadTopics, loadKnowledgePage, parseKnowledgePage, serializeKnowledgePage } from "../knowledge-page.js";
+import { loadProcessingState, findUnprocessedSessionNotes } from "../session-notes.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 // Simple per-tool argument validation helper to reduce drift.
 function assertArgs(args: any, required: Record<string, string>) {
@@ -54,7 +60,7 @@ type JsonRpcResponse =
 const TOOL_DEFS = [
   {
     name: "cm_context",
-    description: "Get relevant rules and history for a task",
+    description: "Get relevant knowledge for a task. Returns full knowledge page content for matching topics, matching user notes, and session note summaries. If a session summary looks relevant, call cm_detail with path 'session-notes/{id}.md' to read the full note.",
     inputSchema: {
       type: "object",
       properties: {
@@ -70,15 +76,17 @@ const TOOL_DEFS = [
   },
   {
     name: "cm_feedback",
-    description: "Record helpful/harmful feedback for a rule",
+    description: "Record helpful/harmful feedback for a playbook rule or knowledge page section. Use bulletId for playbook rules, or path+section for knowledge page sections.",
     inputSchema: {
       type: "object",
       properties: {
-        bulletId: { type: "string" },
+        bulletId: { type: "string", description: "Playbook bullet ID to give feedback on" },
         helpful: { type: "boolean" },
         harmful: { type: "boolean" },
         reason: { type: "string" },
-        session: { type: "string" }
+        session: { type: "string" },
+        path: { type: "string", description: "Knowledge page path (e.g. 'knowledge/auth-service.md') for section-level feedback" },
+        section: { type: "string", description: "Section title within the knowledge page" }
       },
       required: ["bulletId"]
     }
@@ -100,8 +108,22 @@ const TOOL_DEFS = [
     }
   },
   {
+    name: "cm_search",
+    description: "Search knowledge pages, session notes, digests, transcripts, and/or playbook bullets. Uses SQLite FTS5 for ranked full-text search.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query text" },
+        scope: { type: "string", enum: ["all", "knowledge", "sessions", "digests", "transcripts", "playbook"], default: "all", description: "Scope to search within. 'all' searches knowledge + sessions + notes + digests (not transcripts unless specified)." },
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 10 },
+        include_transcripts: { type: "boolean", default: false, description: "Include raw transcripts in results (ranked below curated content)" }
+      },
+      required: ["query"]
+    }
+  },
+  {
     name: "memory_search",
-    description: "Search playbook bullets and/or cass history",
+    description: "DEPRECATED: Use cm_search instead. Search playbook bullets and/or history.",
     inputSchema: {
       type: "object",
       properties: {
@@ -113,6 +135,32 @@ const TOOL_DEFS = [
         workspace: { type: "string", description: "Filter cass search by workspace" }
       },
       required: ["query"]
+    }
+  },
+  {
+    name: "cm_detail",
+    description: "Read a specific file from the memory system (knowledge page, session note, or digest). Optionally extract a specific section from knowledge pages.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Relative path under ~/.memory-system/ (e.g. 'knowledge/auth-service.md', 'session-notes/abc123.md', 'digests/2026-03-24.md')" },
+        section: { type: "string", description: "Optional section title to extract from a knowledge page" }
+      },
+      required: ["path"]
+    }
+  },
+  {
+    name: "cm_snapshot",
+    description: "IMPORTANT: Call this proactively before context compaction or at the end of major tasks to preserve session knowledge. You ARE the LLM generating the note — no API key needed.\n\nFor the `content` field, write VERBOSE session notes that a human can follow without reading the code. For each subtask include:\n- Files changed: what functions/types were added or modified, HOW they work internally (mechanisms, not just names), and WHY they were designed that way\n- Decisions with rationale: what alternatives were considered and why this path was chosen\n- Problems → solutions: the error message, root cause, and exact fix\n- Gotchas: non-obvious behavior, import locations, schema quirks, type mismatches, field name surprises — these save hours in future sessions\n- Test results: counts before/after, specific failures fixed or introduced\n- Unfinished work or open questions\n\nTarget 1-2 paragraphs per subtask, not 1-2 bullet points. Too long is always better than too short — lost knowledge costs hours, extra tokens cost fractions of a cent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session: { type: "string", description: "Transcript file path or session ID. If omitted, processes all modified transcripts." },
+        abstract: { type: "string", description: "1-2 sentence summary of the session. When provided with content, skips the LLM call." },
+        topics: { type: "array", items: { type: "string" }, description: "Topic slugs covered (kebab-case, e.g. 'billing-service')" },
+        content: { type: "string", description: "VERBOSE session note body in markdown. Use ## date headers and ### topic headers. For each subtask: explain what changed and HOW it works (mechanisms, not just function names), WHY decisions were made (alternatives considered), problems with root causes and fixes, gotchas with specific details (field names, import paths, schema quirks). 1-2 paragraphs per subtask minimum. Too long is better than too short." },
+        maxSessions: { type: "integer", minimum: 1, maximum: 50, description: "Max transcripts to process when no session specified (default 10)", default: 10 }
+      }
     }
   },
   {
@@ -154,6 +202,36 @@ const RESOURCE_DEFS = [
     uri: "memory://stats",
     name: "Playbook Stats (alias)",
     description: "Playbook health metrics",
+    mimeType: "application/json"
+  },
+  {
+    uri: "cm://topics",
+    name: "Topics",
+    description: "List of all knowledge topics with metadata",
+    mimeType: "application/json"
+  },
+  {
+    uri: "cm://knowledge/{topic}",
+    name: "Knowledge Page",
+    description: "Full knowledge page for a topic (replace {topic} with topic slug)",
+    mimeType: "text/markdown"
+  },
+  {
+    uri: "cm://digest/{date}",
+    name: "Daily Digest",
+    description: "Daily digest for a date (replace {date} with YYYY-MM-DD)",
+    mimeType: "text/markdown"
+  },
+  {
+    uri: "cm://today",
+    name: "Today's Digest",
+    description: "Alias for today's daily digest",
+    mimeType: "text/markdown"
+  },
+  {
+    uri: "cm://status",
+    name: "System Status",
+    description: "Memory system status: last reflection run, topic count, unprocessed notes, budget",
     mimeType: "application/json"
   }
 ];
@@ -271,7 +349,12 @@ async function handleToolCall(name: string, args: any): Promise<any> {
         workspace: workspace.value,
         json: true
       });
-      return context.result;
+      const result = context.result as any;
+      // Add usage hint for the agent
+      if (result.sessionSummaries?.length > 0 || result.knowledgePageSummaries?.length > 0) {
+        result._hint = "To read full content, call cm_detail with the path. For session notes: 'session-notes/{id}.md' (id includes 'session-' prefix). For knowledge pages in summaries: use the path field directly (e.g. 'knowledge/gtfs/_index.md'). High-relevance knowledge pages are auto-included with full content above.";
+      }
+      return result;
     }
     case "cm_feedback": {
       assertArgs(args, { bulletId: "string" });
@@ -315,7 +398,176 @@ async function handleToolCall(name: string, args: any): Promise<any> {
         durationSec: durationSec.value
       }, config);
     }
+    case "cm_detail": {
+      assertArgs(args, { path: "string" });
+      const pathCheck = validateNonEmptyString(args?.path, "path", { trim: true });
+      if (!pathCheck.ok) throw new Error(pathCheck.message);
+
+      const config = await loadConfig();
+      const baseDir = expandPath("~/.memory-system");
+      const resolved = path.resolve(baseDir, pathCheck.value);
+
+      // Security: ensure resolved path stays under ~/.memory-system/
+      if (!resolved.startsWith(baseDir + path.sep) && resolved !== baseDir) {
+        throw new Error("Path traversal detected: path must be under ~/.memory-system/");
+      }
+
+      let content: string;
+      try {
+        content = await fs.readFile(resolved, "utf-8");
+      } catch {
+        throw new Error(`File not found: ${pathCheck.value}`);
+      }
+
+      const sectionArg = typeof args?.section === "string" ? args.section.trim() : undefined;
+
+      // If this is a knowledge page and a section is requested, extract just that section
+      if (sectionArg && resolved.includes("/knowledge/")) {
+        const parsed = parseKnowledgePage(content);
+        const section = parsed.sections.find(
+          s => s.title.toLowerCase() === sectionArg.toLowerCase()
+        );
+        if (!section) {
+          throw new Error(`Section "${sectionArg}" not found in ${pathCheck.value}. Available: ${parsed.sections.map(s => s.title).join(", ")}`);
+        }
+        return {
+          path: pathCheck.value,
+          content_type: "knowledge_section",
+          section: section.title,
+          content: section.content,
+          metadata: {
+            id: section.id,
+            confidence: section.confidence,
+            source: section.source,
+            added: section.added,
+          },
+        };
+      }
+
+      // Determine content type from path
+      let contentType = "unknown";
+      if (resolved.includes("/knowledge/")) contentType = "knowledge_page";
+      else if (resolved.includes("/session-notes/")) contentType = "session_note";
+      else if (resolved.includes("/digests/")) contentType = "digest";
+
+      const result: any = { path: pathCheck.value, content_type: contentType, content };
+
+      // For knowledge pages, also return section list
+      if (contentType === "knowledge_page") {
+        const parsed = parseKnowledgePage(content);
+        result.sections = parsed.sections.map(s => ({
+          title: s.title,
+          id: s.id,
+          confidence: s.confidence,
+        }));
+      }
+
+      return result;
+    }
+    case "cm_search": {
+      assertArgs(args, { query: "string" });
+      const queryCheck = validateNonEmptyString(args?.query, "query", { trim: true });
+      if (!queryCheck.ok) throw new Error(queryCheck.message);
+
+      const scopeCheck = validateOneOf(
+        args?.scope, "scope",
+        ["all", "knowledge", "sessions", "digests", "transcripts", "playbook"] as const,
+        { allowUndefined: true, caseInsensitive: true }
+      );
+      if (!scopeCheck.ok) throw new Error(scopeCheck.message);
+      const scope = scopeCheck.value ?? "all";
+
+      const limitCheck = validatePositiveInt(args?.limit, "limit", { min: 1, max: 100, allowUndefined: true });
+      if (!limitCheck.ok) throw new Error(limitCheck.message);
+      const limit = limitCheck.value ?? 10;
+
+      const includeTranscripts = Boolean(args?.include_transcripts);
+      const config = await loadConfig();
+      const t0 = performance.now();
+
+      const results: Array<{ type: string; id: string; snippet: string; score: number; title?: string }> = [];
+
+      // Playbook scope: substring match (no FTS)
+      if (scope === "playbook" || scope === "all") {
+        const playbook = await loadMergedPlaybook(config);
+        const bullets = getActiveBullets(playbook);
+        const q = queryCheck.value.toLowerCase();
+        const playbookHits = bullets
+          .filter(b => {
+            const haystack = `${b.content} ${b.category ?? ""} ${b.scope ?? ""}`.toLowerCase();
+            return haystack.includes(q);
+          })
+          .slice(0, limit)
+          .map(b => ({
+            type: "playbook" as const,
+            id: b.id,
+            snippet: b.content,
+            score: 1.0,
+            title: b.category ?? undefined,
+          }));
+        results.push(...playbookHits);
+      }
+
+      // FTS scopes
+      if (scope !== "playbook") {
+        try {
+          const dbPath = expandPath(config.searchDbPath);
+          const searchIndex = openSearchIndex(dbPath);
+          try {
+            // Map scope to FTS tables
+            let tables: Array<"knowledge" | "sessions" | "notes" | "digests" | "transcripts">;
+            if (scope === "all") {
+              tables = ["knowledge", "sessions", "notes", "digests"];
+              if (includeTranscripts) tables.push("transcripts");
+            } else if (scope === "transcripts") {
+              tables = ["transcripts"];
+            } else {
+              // Map scope name to table name
+              const tableMap: Record<string, "knowledge" | "sessions" | "digests"> = {
+                knowledge: "knowledge",
+                sessions: "sessions",
+                digests: "digests",
+              };
+              tables = [tableMap[scope] ?? "knowledge"];
+            }
+
+            const ftsHits = searchIndex.search(queryCheck.value, { tables, limit });
+            for (const hit of ftsHits) {
+              const score = hit.table === "transcripts"
+                ? 1 / (1 + Math.abs(hit.rank)) * 0.5  // Transcripts ranked lower
+                : 1 / (1 + Math.abs(hit.rank));
+              results.push({
+                type: hit.table,
+                id: hit.id,
+                snippet: hit.snippet,
+                score,
+              });
+            }
+          } finally {
+            searchIndex.close();
+          }
+        } catch {
+          // search.db missing or corrupt — skip FTS
+        }
+      }
+
+      // Sort by score descending, deduplicate by id+type
+      const seen = new Set<string>();
+      const deduped = results
+        .sort((a, b) => b.score - a.score)
+        .filter(r => {
+          const key = `${r.type}:${r.id}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, limit);
+
+      maybeProfile("cm_search", t0);
+      return { results: deduped, total: deduped.length };
+    }
     case "memory_search": {
+      // Deprecated alias — delegates to legacy cass-based search for backwards compat
       assertArgs(args, { query: "string" });
       const queryCheck = validateNonEmptyString(args?.query, "query", { trim: true });
       if (!queryCheck.ok) throw new Error(queryCheck.message);
@@ -380,6 +632,70 @@ async function handleToolCall(name: string, args: any): Promise<any> {
       }
 
       return result;
+    }
+    case "cm_snapshot": {
+      const t0 = performance.now();
+      const config = await loadConfig();
+      const sessionArg = args?.session as string | undefined;
+      const maxSessions = (args?.maxSessions as number) ?? 10;
+
+      // Agent-provided content: when the agent passes abstract + content,
+      // we skip the LLM call entirely. The agent IS the LLM.
+      const agentContent = (args?.abstract && args?.content)
+        ? {
+            abstract: args.abstract as string,
+            topics_touched: (args.topics as string[]) ?? [],
+            content: args.content as string,
+          }
+        : undefined;
+
+      const { processTranscript, processAllTranscripts, scanForModifiedTranscripts, findBestTranscriptForCwd } =
+        await import("../session-notes.js");
+
+      if (sessionArg || agentContent) {
+        // Process a specific transcript (or write agent content to the most recent)
+        const scans = await scanForModifiedTranscripts(config);
+        let match = sessionArg
+          ? scans.find(
+              (s) => s.transcriptPath === sessionArg || s.sessionId === sessionArg || s.transcriptPath.includes(sessionArg)
+            )
+          : await findBestTranscriptForCwd(scans); // Match to current project + most recent mtime
+
+        if (!match) {
+          if (agentContent) {
+            return { message: "No modified transcript found to attach agent content to.", processed: 0 };
+          }
+          return { message: "No modified transcript found matching the given session.", processed: 0 };
+        }
+
+        const note = await processTranscript(match, config, { agentContent });
+        maybeProfile("cm_snapshot", t0);
+        return {
+          processed: 1,
+          sessionId: note.frontmatter.id,
+          abstract: note.frontmatter.abstract,
+          topics: note.frontmatter.topics_touched,
+          agentProvided: !!agentContent,
+          message: agentContent
+            ? `Session note saved for ${note.frontmatter.id} (agent-generated, no LLM call)`
+            : `Session note generated for ${note.frontmatter.id}`,
+        };
+      } else {
+        // Process all modified transcripts (periodic job path — needs API key)
+        const result = await processAllTranscripts(config, { maxSessions });
+        maybeProfile("cm_snapshot", t0);
+        return {
+          processed: result.processed.length,
+          errors: result.errors.length,
+          sessions: result.processed.map((n) => ({
+            id: n.frontmatter.id,
+            abstract: n.frontmatter.abstract,
+          })),
+          message: result.processed.length > 0
+            ? `Generated ${result.processed.length} session note(s)`
+            : "No modified transcripts found",
+        };
+      }
     }
     case "memory_reflect": {
       const t0 = performance.now();
@@ -477,6 +793,8 @@ function buildError(id: string | number | null, message: string, code = -32000, 
 
 async function handleResourceRead(uri: string): Promise<any> {
   const config = await loadConfig();
+
+  // Exact match resources
   switch (uri) {
     case "cm://playbook": {
       const playbook = await loadMergedPlaybook(config);
@@ -496,9 +814,65 @@ async function handleResourceRead(uri: string): Promise<any> {
       const stats = computePlaybookStats(playbook, config);
       return { uri, mimeType: "application/json", data: stats };
     }
-    default:
-      throw new Error(`Unknown resource: ${uri}`);
+    case "cm://topics": {
+      const topics = await loadTopics(config);
+      return { uri, mimeType: "application/json", data: topics };
+    }
+    case "cm://today": {
+      const today = new Date().toISOString().slice(0, 10);
+      const digestFile = path.join(expandPath(config.digestsDir), `${today}.md`);
+      try {
+        const content = await fs.readFile(digestFile, "utf-8");
+        return { uri, mimeType: "text/markdown", text: content };
+      } catch {
+        return { uri, mimeType: "text/markdown", text: `No digest found for ${today}` };
+      }
+    }
+    case "cm://status": {
+      const state = await loadProcessingState(config);
+      const topics = await loadTopics(config);
+      const unprocessed = await findUnprocessedSessionNotes(config);
+      let budget: any = null;
+      try {
+        const { checkBudget } = await import("../cost.js");
+        budget = await checkBudget(config);
+      } catch { /* budget module may not be available */ }
+      return {
+        uri,
+        mimeType: "application/json",
+        data: {
+          lastPeriodicJobRun: state.lastPeriodicJobRun ?? null,
+          lastIndexUpdate: state.lastIndexUpdate ?? null,
+          topicCount: topics.length,
+          unprocessedSessionNotes: unprocessed.length,
+          budget: budget ? { exceeded: budget.exceeded, message: budget.message } : null,
+        },
+      };
+    }
   }
+
+  // Prefix-based matching for parameterized URIs
+  if (uri.startsWith("cm://knowledge/")) {
+    const topicSlug = uri.slice("cm://knowledge/".length);
+    if (!topicSlug) throw new Error("Missing topic slug in URI");
+    const page = await loadKnowledgePage(topicSlug, config);
+    if (!page) throw new Error(`Knowledge page not found: ${topicSlug}`);
+    return { uri, mimeType: "text/markdown", text: serializeKnowledgePage(page) };
+  }
+
+  if (uri.startsWith("cm://digest/")) {
+    const date = uri.slice("cm://digest/".length);
+    if (!date) throw new Error("Missing date in URI");
+    const digestFile = path.join(expandPath(config.digestsDir), `${date}.md`);
+    try {
+      const content = await fs.readFile(digestFile, "utf-8");
+      return { uri, mimeType: "text/markdown", text: content };
+    } catch {
+      throw new Error(`Digest not found for date: ${date}`);
+    }
+  }
+
+  throw new Error(`Unknown resource: ${uri}`);
 }
 
 async function routeRequest(body: JsonRpcRequest): Promise<JsonRpcResponse> {

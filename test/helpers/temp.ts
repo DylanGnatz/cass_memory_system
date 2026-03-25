@@ -145,13 +145,13 @@ exit 0
 export interface TestEnv {
   /** Temporary HOME directory */
   home: string;
-  /** Path to ~/.cass-memory */
+  /** Path to ~/.memory-system */
   cassMemoryDir: string;
-  /** Path to ~/.cass-memory/config.json */
+  /** Path to ~/.memory-system/config.json */
   configPath: string;
-  /** Path to ~/.cass-memory/playbook.yaml */
+  /** Path to ~/.memory-system/playbook.yaml */
   playbookPath: string;
-  /** Path to ~/.cass-memory/diary */
+  /** Path to ~/.memory-system/diary */
   diaryDir: string;
   /** Original HOME value to restore */
   originalHome: string;
@@ -165,7 +165,7 @@ export interface TestEnv {
  */
 export async function createIsolatedEnvironment(prefix = "cass-test"): Promise<TestEnv> {
   const home = await mkdtemp(path.join(tmpdir(), `${prefix}-`));
-  const cassMemoryDir = path.join(home, ".cass-memory");
+  const cassMemoryDir = path.join(home, ".memory-system");
 
   await mkdir(cassMemoryDir, { recursive: true });
   await mkdir(path.join(cassMemoryDir, "diary"), { recursive: true });

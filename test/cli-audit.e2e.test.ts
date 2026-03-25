@@ -1,11 +1,10 @@
 /**
- * E2E Tests for CLI audit command - Session Violation and Trauma Scanning
+ * E2E Tests for CLI audit command - Session Violation Scanning
  *
  * Tests the `cm audit` command for:
  * 1. Scanning sessions for rule violations (requires LLM)
- * 2. Scanning for trauma candidates (--trauma mode)
- * 3. JSON output format
- * 4. Error handling
+ * 2. JSON output format
+ * 3. Error handling
  *
  * Uses isolated temp directories and mocked dependencies.
  */
@@ -105,133 +104,6 @@ function createMockLLMIO(results: {
 // --- Test Suites ---
 
 describe("E2E: CLI audit command", () => {
-  describe("audit --trauma mode", () => {
-    it("finds no trauma candidates when sessions are clean", async () => {
-      const log = createE2ELogger("audit --trauma: clean sessions");
-      await log.run(async () => {
-        await withTempCassHome(async (env) => {
-          log.step("Setup: Create config and playbook");
-
-          const config = createTestConfig({
-            playbookPath: env.playbookPath,
-            cassPath: "cass"
-          });
-          await writeFile(env.configPath, JSON.stringify(config));
-          await savePlaybook(createTestPlaybook([]), env.playbookPath);
-
-          // Mock cass runner with clean session content (no dangerous patterns)
-          const cassRunner = createMockCassRunner({
-            exportContent: "This is a normal session with no dangerous commands."
-          });
-
-          log.step("Execute: Run audit --trauma");
-          const capture = captureConsole();
-          try {
-            await auditCommand(
-              { days: 7, trauma: true, json: false },
-              { cassRunner }
-            );
-          } finally {
-            capture.restore();
-          }
-
-          log.step("Verify: Should find no traumas");
-          const output = capture.all();
-          log.snapshot("output", output);
-
-          expect(output).toContain("No potential traumas found");
-        });
-      });
-    });
-
-    it("finds trauma candidates when dangerous patterns exist", async () => {
-      const log = createE2ELogger("audit --trauma: dangerous patterns");
-      await log.run(async () => {
-        await withTempCassHome(async (env) => {
-          log.step("Setup: Create config and playbook");
-
-          const config = createTestConfig({
-            playbookPath: env.playbookPath,
-            cassPath: "cass"
-          });
-          await writeFile(env.configPath, JSON.stringify(config));
-          await savePlaybook(createTestPlaybook([]), env.playbookPath);
-
-          // Mock cass runner with dangerous patterns in session content
-          const cassRunner = createMockCassRunner({
-            exportContent: `
-              User: Let me clean up the system
-              Assistant: I'll help clean up.
-              $ rm -rf /home/user/important
-              This removed the important files.
-              $ git push --force
-              Force pushed to main.
-            `
-          });
-
-          log.step("Execute: Run audit --trauma");
-          const capture = captureConsole();
-          try {
-            await auditCommand(
-              { days: 7, trauma: true, json: false },
-              { cassRunner }
-            );
-          } finally {
-            capture.restore();
-          }
-
-          log.step("Verify: Should find trauma candidates");
-          const output = capture.all();
-          log.snapshot("output", output);
-
-          // Should find rm -rf or git push --force patterns
-          expect(output).toMatch(/candidate|trauma|TRAUMA/i);
-        });
-      });
-    });
-
-    it("outputs JSON format for trauma scan", async () => {
-      const log = createE2ELogger("audit --trauma --json");
-      await log.run(async () => {
-        await withTempCassHome(async (env) => {
-          log.step("Setup: Create config and playbook");
-
-          const config = createTestConfig({
-            playbookPath: env.playbookPath,
-            cassPath: "cass"
-          });
-          await writeFile(env.configPath, JSON.stringify(config));
-          await savePlaybook(createTestPlaybook([]), env.playbookPath);
-
-          const cassRunner = createMockCassRunner({
-            exportContent: "Normal session content."
-          });
-
-          log.step("Execute: Run audit --trauma --json");
-          const capture = captureConsole();
-          try {
-            await auditCommand(
-              { days: 7, trauma: true, json: true },
-              { cassRunner }
-            );
-          } finally {
-            capture.restore();
-          }
-
-          log.step("Verify: Output is valid JSON");
-          const output = capture.all();
-          log.snapshot("output", output);
-
-          const parsed = JSON.parse(output);
-          expect(parsed.command).toBe("audit");
-          expect(parsed.success).toBe(true);
-          expect(parsed.data).toHaveProperty("candidates");
-          expect(Array.isArray(parsed.data.candidates)).toBe(true);
-        });
-      });
-    });
-  });
-
   describe("audit (normal mode with LLM)", () => {
     it("scans sessions and finds no violations", async () => {
       const log = createE2ELogger("audit: no violations");

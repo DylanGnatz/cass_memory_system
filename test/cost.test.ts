@@ -32,7 +32,7 @@ describe("Cost Tracking & Optimization", () => {
         context: "test"
       });
 
-      const costDir = path.join(dir, ".cass-memory", "cost");
+      const costDir = path.join(dir, ".memory-system", "cost");
       const totalPath = path.join(costDir, "total.json");
       
       const total = JSON.parse(await fs.readFile(totalPath, "utf-8"));
@@ -70,7 +70,7 @@ describe("Cost Tracking & Optimization", () => {
         context: "test 2"
       });
 
-      const costDir = path.join(dir, ".cass-memory", "cost");
+      const costDir = path.join(dir, ".memory-system", "cost");
       const totalPath = path.join(costDir, "total.json");
       const total = JSON.parse(await fs.readFile(totalPath, "utf-8"));
       
@@ -86,7 +86,7 @@ describe("Cost Tracking & Optimization", () => {
   it("resets daily stats when day changes", async () => {
     await withTempDir(async (dir) => {
       const config = createTestConfig();
-      const costDir = path.join(dir, ".cass-memory", "cost");
+      const costDir = path.join(dir, ".memory-system", "cost");
       await fs.mkdir(costDir, { recursive: true });
       
       // Simulate yesterday's usage in total.json
@@ -122,7 +122,7 @@ describe("Cost Tracking & Optimization", () => {
         budget: { dailyLimit: 1.0, monthlyLimit: 100.0, warningThreshold: 80, currency: "USD" } 
       });
       
-      const costDir = path.join(dir, ".cass-memory", "cost");
+      const costDir = path.join(dir, ".memory-system", "cost");
       await fs.mkdir(costDir, { recursive: true });
       
       // Create total.json indicating budget exceeded
@@ -157,7 +157,7 @@ describe("Cost Tracking & Optimization", () => {
         budget: { dailyLimit: 0, monthlyLimit: 0, warningThreshold: 80, currency: "USD" }
       });
 
-      const costDir = path.join(dir, ".cass-memory", "cost");
+      const costDir = path.join(dir, ".memory-system", "cost");
       await fs.mkdir(costDir, { recursive: true });
 
       const today = new Date().toISOString().slice(0, 10);

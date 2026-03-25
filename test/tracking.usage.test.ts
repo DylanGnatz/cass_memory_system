@@ -45,7 +45,7 @@ describe("Usage Analytics Tracking", () => {
       const logPath = getUsageLogPath();
       // Restore test path for subsequent tests
       setUsageLogPath(testLogPath);
-      expect(logPath).toContain(".cass-memory");
+      expect(logPath).toContain(".memory-system");
       expect(logPath).toContain("usage.jsonl");
     });
   });

@@ -1,7 +1,6 @@
 import { loadConfig } from "../config.js";
 import { loadMergedPlaybook, getActiveBullets } from "../playbook.js";
 import { scanSessionsForViolations } from "../audit.js";
-import { scanForTraumas } from "../trauma.js";
 import { AuditResult, ErrorCode } from "../types.js";
 import { cassTimeline, type CassRunner } from "../cass.js";
 import { getAvailableProviders, type LLMIO } from "../llm.js";
@@ -10,7 +9,7 @@ import { getCliName, reportError, printJsonResult, validatePositiveInt } from ".
 import { iconPrefix } from "../output.js";
 
 export async function auditCommand(
-  flags: { days?: number; json?: boolean; trauma?: boolean },
+  flags: { days?: number; json?: boolean },
   deps: { io?: LLMIO; cassRunner?: CassRunner } = {}
 ) {
   const startedAtMs = Date.now();
@@ -32,43 +31,6 @@ export async function auditCommand(
 
     const days = daysCheck.value ?? 7;
     const config = await loadConfig();
-
-    // === TRAUMA SCAN MODE ===
-    if (flags.trauma) {
-      if (!flags.json) {
-        console.log(chalk.bold.red(`\n${iconPrefix("warning")}Project Hot Stove: Scanning for past catastrophes...`));
-      }
-      
-      const candidates = await scanForTraumas(config, days, deps.cassRunner);
-      
-      if (flags.json) {
-        printJsonResult(command, { candidates }, { startedAtMs });
-        return;
-      }
-      
-      if (candidates.length === 0) {
-        console.log(chalk.green("No potential traumas found (or maybe you hid them well)."));
-        return;
-      }
-      
-      console.log(chalk.yellow(`Found ${candidates.length} candidate traumas:`));
-      for (const c of candidates) {
-        console.log(chalk.red(`\n[TRAUMA CANDIDATE]`));
-        console.log(`  Pattern: ${chalk.bold(c.description)}`);
-        console.log(`  Session: ${c.sessionPath}`);
-        console.log(`  Evidence: ${chalk.white.bgRed(c.evidence)}`);
-        // Show limited context
-        const preview = c.context.length > 200 ? c.context.slice(0, 200) + "..." : c.context;
-        console.log(`  Context:  "${preview.replace(/\n/g, " ")}"`);
-      }
-      console.log(
-        chalk.bold(
-          `\nTo convert a candidate into a scar, use: ${cli} trauma add "<pattern>" --severity CRITICAL --message "..."`
-        )
-      );
-      console.log(chalk.gray(`Tip: bulk import with: ${cli} trauma import <file>`));
-      return;
-    }
 
     const cassRunner = deps.cassRunner;
     const hasApiKeyOverride = typeof config.apiKey === "string" && config.apiKey.trim() !== "";

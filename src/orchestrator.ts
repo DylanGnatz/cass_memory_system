@@ -1,16 +1,24 @@
-import { Config, CurationResult, Playbook, PlaybookDelta, DecisionLogEntry, PlaybookBullet, ProcessedEntry } from "./types.js";
+import { Config, CurationResult, Playbook, PlaybookDelta, KnowledgeDelta, DecisionLogEntry, PlaybookBullet, ProcessedEntry, Topic } from "./types.js";
 import { loadMergedPlaybook, loadPlaybook, savePlaybook, findBullet, mergePlaybooks } from "./playbook.js";
 import { ProcessedLog, getProcessedLogPath } from "./tracking.js";
 import { findUnprocessedSessions, cassExport } from "./cass.js";
 import { generateDiary } from "./diary.js";
+import { generateDiaryFromNote } from "./diary.js";
 import { reflectOnSession } from "./reflect.js";
+import { reflectOnSessionTwoCalls, type TwoCallReflectionResult } from "./reflect.js";
 import { validateDelta } from "./validate.js";
+import { validateKnowledgeDelta, detectContradiction } from "./validate.js";
+import { reportContradiction } from "./review-queue.js";
 import type { LLMIO } from "./llm.js";
-import { curatePlaybook } from "./curate.js";
+import { curatePlaybook, curateKnowledge, type KnowledgeCurationResult } from "./curate.js";
 import { expandPath, log, warn, error, now, fileExists, resolveRepoDir, generateBulletId, hashContent, jaccardSimilarity, ensureDir, parseInlineFeedback } from "./utils.js";
 import { withLock } from "./lock.js";
 import { extractRuleIdsFromTranscript, classifySessionOutcome, recordOutcome, applyOutcomeFeedback, type OutcomeInput } from "./outcome.js";
+import { findUnprocessedSessionNotes, markSessionNoteProcessed, loadProcessingState, saveProcessingState, type ParsedSessionNote } from "./session-notes.js";
+import { loadTopics, loadKnowledgePage } from "./knowledge-page.js";
+import { openSearchIndex } from "./search.js";
 import path from "node:path";
+import fs from "node:fs/promises";
 
 export interface ReflectionOptions {
   days?: number;
@@ -38,6 +46,10 @@ export interface ReflectionOutcome {
     missingRules: string[];
     inlineFeedbackDeltas: number;
   };
+  /** Phase 3: Knowledge curation results */
+  knowledgeResult?: KnowledgeCurationResult;
+  /** Phase 3: Session notes processed via the two-call pipeline */
+  sessionNotesProcessed?: number;
 }
 
 export type ReflectionProgressEvent =
@@ -91,7 +103,7 @@ export async function orchestrateReflection(
   const reflectionLockPath = `${logPath}.orchestrator`;
 
   // Ensure reflections directory exists before lock acquisition (fixes #14)
-  // Without this, the lock can fail on fresh installs where ~/.cass-memory/reflections/ doesn't exist
+  // Without this, the lock can fail on fresh installs where ~/.memory-system/reflections/ doesn't exist
   await ensureDir(path.dirname(reflectionLockPath));
 
   return withLock(reflectionLockPath, async () => {
@@ -123,17 +135,18 @@ export async function orchestrateReflection(
           config.cassPath
         );
       } catch (err: any) {
+        // Don't return early — Phase 3 knowledge pipeline still needs to run
         errors.push(`Session discovery failed: ${err.message}`);
-        return { sessionsProcessed: 0, deltasGenerated: 0, errors };
       }
     }
 
     const unprocessed = sessions.filter(s => !processedLog.has(s));
-    if (unprocessed.length === 0) {
-      return { sessionsProcessed: 0, deltasGenerated: 0, errors };
-    }
 
-    options.onProgress?.({ phase: "discovery", totalSessions: unprocessed.length });
+    // Note: don't return early if unprocessed is empty — the Phase 3 knowledge
+    // pipeline below also needs to run for session notes with processed: false.
+    if (unprocessed.length > 0) {
+      options.onProgress?.({ phase: "discovery", totalSessions: unprocessed.length });
+    }
 
     // 4. Reflection Phase (LLM) - Done WITHOUT holding playbook locks
     const allDeltas: PlaybookDelta[] = [];
@@ -252,28 +265,27 @@ export async function orchestrateReflection(
       }
     }
 
-    if (options.dryRun) {
-      return {
-        sessionsProcessed,
-        deltasGenerated: allDeltas.length,
-        dryRunDeltas: allDeltas,
-        errors
-      };
-    }
+    let dryRunDeltas: PlaybookDelta[] | undefined;
 
-    if (allDeltas.length === 0) {
+    if (options.dryRun) {
+      dryRunDeltas = allDeltas;
+      // Don't return — Phase 3 knowledge pipeline still needs to run below
+    } else if (allDeltas.length === 0) {
       // Even if no deltas were generated, we should still mark sessions as processed
       // (e.g., empty sessions or sessions with no insights) to avoid infinite loops.
       if (pendingProcessedEntries.length > 0) {
         await processedLog.appendBatch(pendingProcessedEntries);
       }
-      return { sessionsProcessed, deltasGenerated: 0, errors };
+      // Don't return — Phase 3 knowledge pipeline still needs to run below
     }
 
     // 5. Merge Phase: Lock Playbooks, Reload, Curate, Save
     // We lock Global first, then Repo (if exists) to prevent deadlocks.
     let globalResult: CurationResult | undefined;
     let repoResult: CurationResult | undefined;
+    let autoOutcome: ReflectionOutcome["autoOutcome"] | undefined;
+
+   if (!options.dryRun && allDeltas.length > 0) {
 
     const performMerge = async () => {
       // Reload fresh playbooks under lock
@@ -407,7 +419,6 @@ export async function orchestrateReflection(
     }
 
     // 6. Auto-record rule outcomes (post-merge, best-effort)
-    let autoOutcome: ReflectionOutcome["autoOutcome"] | undefined;
     if (pendingOutcomes.length > 0) {
       try {
         const records = [];
@@ -442,13 +453,224 @@ export async function orchestrateReflection(
       };
     }
 
+    } // end if (!options.dryRun && allDeltas.length > 0)
+
+    // ========================================================================
+    // PHASE 3: KNOWLEDGE REFLECTION PIPELINE
+    // Process session notes with processed: false through the two-call
+    // Reflector → Validator → Curator pipeline.
+    // ========================================================================
+
+    let knowledgeResult: KnowledgeCurationResult | undefined;
+    let sessionNotesProcessed = 0;
+
+    try {
+      const unprocessedNotes = await findUnprocessedSessionNotes(config, options.maxSessions || 5);
+
+      if (unprocessedNotes.length > 0) {
+        log(`Found ${unprocessedNotes.length} unprocessed session note(s) for knowledge reflection`);
+
+        const existingTopics = await loadTopics(config);
+        const allKnowledgeDeltas: KnowledgeDelta[] = [];
+
+        // Collect all session note bodies for the Validator's three-source evidence
+        const sessionNoteBodies = new Map<string, string>();
+        for (const note of unprocessedNotes) {
+          sessionNoteBodies.set(note.frontmatter.id, note.body);
+        }
+
+        for (const note of unprocessedNotes) {
+          const noteId = note.frontmatter.id;
+          try {
+            // 1. Generate diary from session note
+            const diary = await generateDiaryFromNote(
+              noteId,
+              note.body,
+              note.frontmatter.abstract,
+              note.frontmatter.topics_touched,
+              config
+            );
+
+            // 2. Load relevant knowledge pages for Call 2 context
+            const relevantTopicSlugs = new Set([
+              ...note.frontmatter.topics_touched,
+              ...diary.tags,
+            ]);
+            const knowledgePagesContent: string[] = [];
+            for (const slug of relevantTopicSlugs) {
+              const page = await loadKnowledgePage(slug, config);
+              if (page) {
+                knowledgePagesContent.push(`# ${page.frontmatter.topic}\n${page.sections.map(s => `## ${s.title}\n${s.content}`).join("\n\n")}`);
+              }
+            }
+
+            // 3. Two-call reflection
+            const reflectResult = await reflectOnSessionTwoCalls(
+              diary,
+              note.body,
+              snapshotPlaybook,
+              existingTopics,
+              knowledgePagesContent.join("\n\n---\n\n"),
+              noteId,
+              config,
+              options.io
+            );
+
+            // 4. Validate playbook deltas (existing path)
+            for (const delta of reflectResult.playbookDeltas) {
+              const validation = await validateDelta(delta, config);
+              if (validation.valid) {
+                if (validation.result?.refinedRule && delta.type === "add") {
+                  delta.bullet.content = validation.result.refinedRule;
+                }
+                allDeltas.push(delta);
+              }
+            }
+
+            // 5. Validate knowledge deltas
+            for (const delta of reflectResult.knowledgeDeltas) {
+              const validation = await validateKnowledgeDelta(delta, sessionNoteBodies, config);
+              if (validation.valid) {
+                // Upgrade confidence if evidence supports it
+                if (validation.confidence && delta.type === "knowledge_page_append") {
+                  (delta as any).confidence = validation.confidence;
+                }
+                allKnowledgeDeltas.push(delta);
+              }
+            }
+
+            sessionNotesProcessed++;
+          } catch (err: any) {
+            errors.push(`Knowledge reflection failed for ${noteId}: ${err?.message || String(err)}`);
+          }
+        }
+
+        // 6. Curate knowledge deltas (deterministic, no LLM)
+        if (allKnowledgeDeltas.length > 0 && !options.dryRun) {
+          // Reload topics in case Call 1 suggested new ones in an earlier session
+          const latestTopics = await loadTopics(config);
+          knowledgeResult = await curateKnowledge(allKnowledgeDeltas, latestTopics, config);
+        }
+
+        // 7. Re-index knowledge pages, session notes, and digests in SQLite
+        if (!options.dryRun) {
+          try {
+            const dbPath = expandPath(config.searchDbPath);
+            const searchIndex = openSearchIndex(dbPath);
+            try {
+              // Re-index knowledge pages (supports both directory model and legacy flat files)
+              const knowledgeDir = expandPath(config.knowledgeDir);
+              const { parseKnowledgePage } = await import("./knowledge-page.js");
+              const entries = await fs.readdir(knowledgeDir, { withFileTypes: true }).catch(() => []);
+              for (const entry of entries) {
+                if (entry.isDirectory()) {
+                  // Directory model: knowledge/{slug}/*.md
+                  const subDir = path.join(knowledgeDir, entry.name);
+                  const subFiles = await fs.readdir(subDir).catch(() => [] as string[]);
+                  for (const subFile of subFiles) {
+                    if (!subFile.endsWith(".md")) continue;
+                    try {
+                      const raw = await fs.readFile(path.join(subDir, subFile), "utf-8");
+                      const page = parseKnowledgePage(raw);
+                      for (const section of page.sections) {
+                        searchIndex.indexKnowledge({
+                          topic: `${entry.name}/${subFile.replace(".md", "")}`,
+                          section_title: section.title,
+                          content: section.content,
+                        });
+                      }
+                    } catch { /* skip malformed */ }
+                  }
+                } else if (entry.name.endsWith(".md")) {
+                  // Legacy flat file: knowledge/{slug}.md
+                  try {
+                    const raw = await fs.readFile(path.join(knowledgeDir, entry.name), "utf-8");
+                    const page = parseKnowledgePage(raw);
+                    for (const section of page.sections) {
+                      searchIndex.indexKnowledge({
+                        topic: page.frontmatter.topic,
+                        section_title: section.title,
+                        content: section.content,
+                      });
+                    }
+                  } catch { /* skip malformed */ }
+                }
+              }
+
+              // Re-index session notes
+              const sessionNotesDir = expandPath(config.sessionNotesDir);
+              const noteFiles = await fs.readdir(sessionNotesDir).catch(() => [] as string[]);
+              for (const file of noteFiles) {
+                if (!file.endsWith(".md")) continue;
+                try {
+                  const raw = await fs.readFile(path.join(sessionNotesDir, file), "utf-8");
+                  const { parseSessionNote } = await import("./session-notes.js");
+                  const note = parseSessionNote(raw);
+                  searchIndex.indexSession(
+                    note.frontmatter.id,
+                    note.frontmatter.abstract,
+                    note.body,
+                  );
+                } catch {
+                  // Skip malformed notes
+                }
+              }
+
+              // Re-index digests
+              const digestsDir = expandPath(config.digestsDir);
+              const digestFiles = await fs.readdir(digestsDir).catch(() => [] as string[]);
+              for (const file of digestFiles) {
+                if (!file.endsWith(".md")) continue;
+                try {
+                  const raw = await fs.readFile(path.join(digestsDir, file), "utf-8");
+                  const bodyMatch = raw.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
+                  const body = bodyMatch?.[1]?.trim() || "";
+                  const date = file.replace(/\.md$/, "");
+                  if (body) {
+                    searchIndex.indexDigest({ date, content: body });
+                  }
+                } catch {
+                  // Skip malformed digests
+                }
+              }
+
+              // Update lastIndexUpdate timestamp in state.json
+              const state = await loadProcessingState(config);
+              state.lastIndexUpdate = new Date().toISOString();
+              await saveProcessingState(state, config);
+            } finally {
+              searchIndex.close();
+            }
+          } catch {
+            // search.db may not exist — non-fatal
+          }
+        }
+
+        // 8. Mark session notes as processed
+        if (!options.dryRun) {
+          for (const note of unprocessedNotes.slice(0, sessionNotesProcessed)) {
+            try {
+              await markSessionNoteProcessed(note.frontmatter.id, config);
+            } catch (err: any) {
+              warn(`Failed to mark note ${note.frontmatter.id} as processed: ${err?.message}`);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      errors.push(`Knowledge reflection pipeline failed: ${err?.message || String(err)}`);
+    }
+
     return {
       sessionsProcessed,
       deltasGenerated: allDeltas.length,
+      dryRunDeltas,
       globalResult,
       repoResult,
       errors,
       autoOutcome,
+      knowledgeResult,
+      sessionNotesProcessed: sessionNotesProcessed > 0 ? sessionNotesProcessed : undefined,
     };
   });
 }

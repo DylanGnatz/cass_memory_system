@@ -46,7 +46,7 @@ function runCm(args: string[], cwd: string, env: Record<string, string> = {}): C
 }
 
 function patchCassPathToNonexistent(testDir: string): void {
-  const configPath = join(testDir, ".cass-memory", "config.json");
+  const configPath = join(testDir, ".memory-system", "config.json");
   const raw = readFileSync(configPath, "utf-8");
   const json = JSON.parse(raw) as any;
   json.cassPath = "__nonexistent__";
@@ -85,7 +85,7 @@ describe("E2E: ACE Learning Loop", () => {
       patchCassPathToNonexistent(testDir);
       logger.endStep("init", true);
 
-      const cassMemoryDir = join(testDir, ".cass-memory");
+      const cassMemoryDir = join(testDir, ".memory-system");
       const diaryDir = join(cassMemoryDir, "diary");
       expect(existsSync(diaryDir)).toBe(true);
 

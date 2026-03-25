@@ -13,10 +13,17 @@ import {
   DeprecateDeltaSchema,
   MergeDeltaSchema,
   CassHit,
-  DecisionLogEntry
+  DecisionLogEntry,
+  KnowledgeDelta,
+  KnowledgePageAppendDelta,
+  DigestUpdateDelta,
+  TopicSuggestionDelta,
+  Topic,
+  type ReflectorCall1Output,
+  type ReflectorCall2Output,
 } from "./types.js";
-import { runReflector, type LLMIO } from "./llm.js";
-import { log, now, hashContent } from "./utils.js";
+import { runReflector, runReflectorCall1, runReflectorCall2, type LLMIO } from "./llm.js";
+import { log, now, hashContent, generateBulletId } from "./utils.js";
 
 // --- Helper: Summarize Playbook for Prompt ---
 
@@ -312,4 +319,222 @@ export async function reflectOnSession(
   }
 
   return { deltas: allDeltas, decisionLog };
+}
+
+// ============================================================================
+// PHASE 3: TWO-CALL REFLECTOR
+// ============================================================================
+
+export interface TwoCallReflectionResult {
+  playbookDeltas: PlaybookDelta[];
+  knowledgeDeltas: KnowledgeDelta[];
+  decisionLog: DecisionLogEntry[];
+  call1Output: ReflectorCall1Output | null;
+}
+
+/**
+ * Format topics for the reflector prompt.
+ */
+export function formatTopicsForPrompt(topics: Topic[]): string {
+  if (topics.length === 0) return "(No topics defined yet)";
+
+  function formatTopic(t: Topic): string[] {
+    const lines = [`  - ${t.slug}: ${t.name} — ${t.description}`];
+    if (t.subpages && t.subpages.length > 0) {
+      lines.push(`    Sub-pages:`);
+      for (const sp of t.subpages) {
+        lines.push(`      - ${sp.slug}: ${sp.name} — ${sp.description}`);
+      }
+    }
+    return lines;
+  }
+
+  const userTopics = topics.filter(t => t.source === "user");
+  const systemTopics = topics.filter(t => t.source === "system");
+  const lines: string[] = [];
+  if (userTopics.length > 0) {
+    lines.push("User-defined topics (PREFERRED — always route to these when content fits):");
+    for (const t of userTopics) lines.push(...formatTopic(t));
+  }
+  if (systemTopics.length > 0) {
+    lines.push("System-suggested topics:");
+    for (const t of systemTopics) lines.push(...formatTopic(t));
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Phase 3 two-call reflector. Replaces the single-call iterative loop.
+ *
+ * Call 1: structural/extractive — diary + topics + playbook → bullets + topic suggestions
+ * Call 2: generative/narrative — diary + session note + knowledge pages → knowledge sections + digest
+ *
+ * Returns both PlaybookDelta[] (for bullet curation) and KnowledgeDelta[] (for knowledge curation).
+ */
+export async function reflectOnSessionTwoCalls(
+  diary: DiaryEntry,
+  sessionNoteBody: string,
+  playbook: Playbook,
+  existingTopics: Topic[],
+  knowledgePageContent: string,
+  sessionId: string,
+  config: Config,
+  io?: LLMIO
+): Promise<TwoCallReflectionResult> {
+  log(`Reflecting (two-call) on diary ${diary.id}...`);
+
+  const decisionLog: DecisionLogEntry[] = [];
+  const playbookDeltas: PlaybookDelta[] = [];
+  const knowledgeDeltas: KnowledgeDelta[] = [];
+  let call1Output: ReflectorCall1Output | null = null;
+
+  // ── Call 1: Structural/Extractive ──────────────────────────────────
+
+  try {
+    const existingBullets = formatBulletsForPrompt(playbook.bullets);
+    const topicsText = formatTopicsForPrompt(existingTopics);
+
+    call1Output = await runReflectorCall1(
+      diary,
+      topicsText,
+      existingBullets,
+      config,
+      io
+    );
+
+    // Convert Call 1 bullets → PlaybookDelta "add" deltas
+    for (const bullet of call1Output.bullets || []) {
+      playbookDeltas.push({
+        type: "add" as const,
+        bullet: {
+          content: bullet.content,
+          scope: bullet.scope,
+          category: bullet.category,
+          type: bullet.type,
+          kind: bullet.kind,
+        },
+        sourceSession: diary.sessionPath,
+      });
+    }
+
+    // Convert Call 1 topic suggestions → TopicSuggestionDelta
+    for (const ts of call1Output.topic_suggestions || []) {
+      knowledgeDeltas.push({
+        type: "topic_suggestion" as const,
+        slug: ts.slug,
+        name: ts.name,
+        description: ts.description,
+        suggested_from_session: sessionId,
+      });
+    }
+
+    // Dedup playbook deltas
+    const uniquePlaybook = deduplicateDeltas(playbookDeltas, []);
+    const dupsRemoved = playbookDeltas.length - uniquePlaybook.length;
+    playbookDeltas.length = 0;
+    playbookDeltas.push(...uniquePlaybook);
+
+    decisionLog.push({
+      timestamp: now(),
+      phase: "add",
+      action: "accepted",
+      reason: `Call 1: ${(call1Output.bullets || []).length} bullets proposed (${dupsRemoved} deduped), ${(call1Output.topic_suggestions || []).length} topic suggestions`,
+      details: {
+        bulletsProposed: (call1Output.bullets || []).length,
+        topicSuggestionsProposed: (call1Output.topic_suggestions || []).length,
+        duplicatesRemoved: dupsRemoved,
+      },
+    });
+  } catch (err) {
+    decisionLog.push({
+      timestamp: now(),
+      phase: "add",
+      action: "rejected",
+      reason: `Call 1 failed: ${err instanceof Error ? err.message : String(err)}`,
+      details: { error: String(err) },
+    });
+    log(`Reflector Call 1 failed: ${err}`);
+    // Call 2 can still run — it doesn't depend on Call 1's output
+  }
+
+  // ── Call 2: Generative/Narrative ───────────────────────────────────
+
+  try {
+    // Only use existing approved topics — don't include suggestions from Call 1.
+    // Topic suggestions go to the review queue; knowledge pages are only
+    // written for topics the user has explicitly created or approved.
+    const availableTopics = [...existingTopics];
+
+    // Cold start fallback: if no topics exist at all, use a general catch-all
+    if (availableTopics.length === 0) {
+      availableTopics.push({
+        slug: "general",
+        name: "General",
+        description: "Catch-all topic for knowledge that doesn't fit a specific category",
+        source: "system" as const,
+        created: now(),
+      });
+    }
+
+    const availableTopicsText = formatTopicsForPrompt(availableTopics);
+
+    const call2Output = await runReflectorCall2(
+      diary,
+      sessionNoteBody,
+      knowledgePageContent,
+      availableTopicsText,
+      sessionId,
+      config,
+      io
+    );
+
+    // Convert Call 2 page updates → KnowledgePageUpdateDelta
+    const pageUpdates = call2Output.page_updates || [];
+    for (const update of pageUpdates) {
+      knowledgeDeltas.push({
+        type: "knowledge_page_update" as const,
+        topic_slug: update.topic_slug,
+        sub_page: update.sub_page || "_index",
+        revised_content: update.revised_content,
+        source_session: sessionId,
+        updated_date: now().split("T")[0],
+        contradictions: update.contradictions || [],
+      });
+    }
+
+    // Convert Call 2 digest → DigestUpdateDelta
+    if (call2Output.digest_content && call2Output.digest_content.trim().length > 0) {
+      const today = new Date().toISOString().split("T")[0];
+      knowledgeDeltas.push({
+        type: "digest_update" as const,
+        date: today,
+        content: call2Output.digest_content,
+        sessions_covered: [sessionId],
+      });
+    }
+
+    decisionLog.push({
+      timestamp: now(),
+      phase: "add",
+      action: "accepted",
+      reason: `Call 2: ${pageUpdates.length} page updates, digest ${call2Output.digest_content ? "generated" : "empty"}`,
+      details: {
+        pagesUpdated: pageUpdates.length,
+        digestGenerated: !!call2Output.digest_content,
+        topicsCovered: [...new Set(pageUpdates.map(u => u.topic_slug))],
+        contradictionsFlagged: pageUpdates.reduce((sum, u) => sum + (u.contradictions?.length || 0), 0),
+      },
+    });
+  } catch (err) {
+    decisionLog.push({
+      timestamp: now(),
+      phase: "add",
+      action: "rejected",
+      reason: `Call 2 failed: ${err instanceof Error ? err.message : String(err)}`,
+      details: { error: String(err) },
+    });
+    log(`Reflector Call 2 failed: ${err}`);
+  }
+
+  return { playbookDeltas, knowledgeDeltas, decisionLog, call1Output };
 }

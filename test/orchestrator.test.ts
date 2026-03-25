@@ -314,7 +314,7 @@ describe("orchestrateReflection (unit)", () => {
     // "cm reflect fails with 'Could not acquire lock' when .orchestrator file doesn't exist"
     //
     // The bug occurred because withLock would fail on fresh installs where
-    // ~/.cass-memory/reflections/ doesn't exist. The fix ensures the parent
+    // ~/.memory-system/reflections/ doesn't exist. The fix ensures the parent
     // directory is created before attempting lock acquisition.
     await withIsolatedHome(async (env) => {
       writeFileSync(env.playbookPath, yaml.stringify(createTestPlaybook([])), "utf-8");
@@ -328,7 +328,7 @@ describe("orchestrateReflection (unit)", () => {
       ]);
 
       // Verify reflections directory does NOT exist (simulate fresh install)
-      const reflectionsDir = path.join(env.home, ".cass-memory", "reflections");
+      const reflectionsDir = path.join(env.home, ".memory-system", "reflections");
       const { existsSync } = await import("node:fs");
       expect(existsSync(reflectionsDir)).toBe(false);
 

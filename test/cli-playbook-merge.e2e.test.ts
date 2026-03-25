@@ -2,7 +2,7 @@
  * E2E Tests for Playbook Merge - Global plus Repo Playbooks
  *
  * Tests the merging of bullets from multiple playbook sources:
- * - Global playbook (~/.cass-memory/playbook.yaml)
+ * - Global playbook (~/.memory-system/playbook.yaml)
  * - Repo playbook (.cass/playbook.yaml)
  */
 import { describe, it, expect } from "bun:test";

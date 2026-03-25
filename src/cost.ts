@@ -22,6 +22,7 @@ const MODEL_COSTS: Record<string, { input: number; output: number }> = {
   "claude-3-5-sonnet-20241022": { input: 3.0, output: 15.0 },
   "claude-3-opus-20240229": { input: 15.0, output: 75.0 },
   "claude-3-haiku-20240307": { input: 0.25, output: 1.25 },
+  "claude-haiku-4-5-20251001": { input: 1.0, output: 5.0 },
   
   // OpenAI
   "gpt-4o": { input: 2.5, output: 10.0 },
@@ -50,7 +51,7 @@ export async function recordCost(
     cost
   };
 
-  const costDir = expandPath("~/.cass-memory/cost");
+  const costDir = expandPath("~/.memory-system/cost");
   await ensureDir(costDir);
 
   const month = new Date().toISOString().slice(0, 7); // YYYY-MM
@@ -115,7 +116,7 @@ export async function checkBudget(config: Config): Promise<{ allowed: boolean; r
   const budget = config.budget;
   if (!budget) return { allowed: true }; // No budget set
 
-  const costDir = expandPath("~/.cass-memory/cost");
+  const costDir = expandPath("~/.memory-system/cost");
   const totalPath = path.join(costDir, "total.json");
   
   // If total.json doesn't exist, we assume 0 cost (or legacy migration could happen here, 
@@ -155,7 +156,7 @@ export async function getUsageStats(config: Config): Promise<{
   dailyLimit: number;
   monthlyLimit: number;
 }> {
-  const costDir = expandPath("~/.cass-memory/cost");
+  const costDir = expandPath("~/.memory-system/cost");
   const totalPath = path.join(costDir, "total.json");
   
   let dailyTotal = 0;

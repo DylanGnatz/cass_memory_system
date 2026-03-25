@@ -18,7 +18,7 @@ Currently, there's no memory of which sessions have been analyzed. If an agent's
 
 ### Design Decisions
 
-**State Location:** `~/.cass-memory/onboarding-state.json`
+**State Location:** `~/.memory-system/onboarding-state.json`
 - Consistent with existing config location
 - Separate from playbook (different concern)
 - Survives `cm init --force` (intentional)

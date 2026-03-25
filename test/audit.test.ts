@@ -367,65 +367,6 @@ describe("audit command - Unit Tests", () => {
     );
   });
 
-  test("trauma scan mode with no candidates (JSON mode)", async () => {
-    await withTempCassHome(async (env) => {
-      await withCwd(env.home, async () => {
-        // Need to stub cass search for trauma scanning
-        const cassRunner: CassRunner = {
-          execFile: async (_file, args) => {
-            const cmd = args[0] ?? "";
-            if (cmd === "timeline") return { stdout: JSON.stringify({ groups: [] }), stderr: "" };
-            if (cmd === "export") return { stdout: "", stderr: "" };
-            if (cmd === "search") return { stdout: "[]", stderr: "" };  // No trauma matches
-            throw new Error(`Unexpected cass execFile command: ${cmd}`);
-          },
-          spawnSync: () => ({ status: 0, stdout: "", stderr: "" }),
-          spawn: (() => { throw new Error("spawn not implemented"); }) as any,
-        };
-
-        writeFileSync(env.configPath, JSON.stringify({ cassPath: "cass" }, null, 2));
-        writeFileSync(env.playbookPath, yaml.stringify(createTestPlaybook([])));
-
-        const { output } = await captureConsoleLog(() =>
-          auditCommand({ days: 7, json: true, trauma: true }, { cassRunner })
-        );
-
-        const payload = JSON.parse(output) as any;
-        expect(payload.success).toBe(true);
-        expect(payload.data.candidates).toEqual([]);
-      });
-    });
-  });
-
-  test("trauma scan mode with no candidates (human-readable mode)", async () => {
-    await withTempCassHome(async (env) => {
-      await withCwd(env.home, async () => {
-        // Need to stub cass search for trauma scanning
-        const cassRunner: CassRunner = {
-          execFile: async (_file, args) => {
-            const cmd = args[0] ?? "";
-            if (cmd === "timeline") return { stdout: JSON.stringify({ groups: [] }), stderr: "" };
-            if (cmd === "export") return { stdout: "", stderr: "" };
-            if (cmd === "search") return { stdout: "[]", stderr: "" };  // No trauma matches
-            throw new Error(`Unexpected cass execFile command: ${cmd}`);
-          },
-          spawnSync: () => ({ status: 0, stdout: "", stderr: "" }),
-          spawn: (() => { throw new Error("spawn not implemented"); }) as any,
-        };
-
-        writeFileSync(env.configPath, JSON.stringify({ cassPath: "cass" }, null, 2));
-        writeFileSync(env.playbookPath, yaml.stringify(createTestPlaybook([])));
-
-        const { output } = await captureConsoleLog(() =>
-          auditCommand({ days: 7, json: false, trauma: true }, { cassRunner })
-        );
-
-        expect(output).toContain("Project Hot Stove");
-        expect(output).toContain("No potential traumas found");
-      });
-    });
-  });
-
   test("displays human-readable audit results with violations", async () => {
     await withEnvAsync(
       {
@@ -473,56 +414,6 @@ describe("audit command - Unit Tests", () => {
         });
       }
     );
-  });
-
-  test("trauma scan mode with found candidates displays human-readable output", async () => {
-    await withTempCassHome(async (env) => {
-      await withCwd(env.home, async () => {
-        // Stub cass to return trauma search results with correct CassHit format
-        const cassRunner: CassRunner = {
-          execFile: async (_file, args) => {
-            const cmd = args[0] ?? "";
-            if (cmd === "timeline") return { stdout: JSON.stringify({ groups: [] }), stderr: "" };
-            if (cmd === "export") {
-              // Return session content that matches DOOM_PATTERNS (apology + destructive action)
-              return {
-                stdout: "I apologize for the mistake. I deleted your important database files by accident.",
-                stderr: ""
-              };
-            }
-            if (cmd === "search") {
-              // Return search results with correct CassHit format
-              return {
-                stdout: JSON.stringify([
-                  {
-                    source_path: "/sessions/trauma-session.jsonl",
-                    line_number: 10,
-                    agent: "claude",
-                    snippet: "I apologize for deleting your database",
-                    score: 0.9,
-                  },
-                ]),
-                stderr: "",
-              };
-            }
-            throw new Error(`Unexpected cass execFile command: ${cmd}`);
-          },
-          spawnSync: () => ({ status: 0, stdout: "", stderr: "" }),
-          spawn: (() => { throw new Error("spawn not implemented"); }) as any,
-        };
-
-        writeFileSync(env.configPath, JSON.stringify({ cassPath: "cass" }, null, 2));
-        writeFileSync(env.playbookPath, yaml.stringify(createTestPlaybook([])));
-
-        const { output } = await captureConsoleLog(() =>
-          auditCommand({ days: 7, json: false, trauma: true }, { cassRunner })
-        );
-
-        expect(output).toContain("Project Hot Stove");
-        // Should show found candidates or no candidates message
-        expect(output.toLowerCase()).toMatch(/candidate|trauma|found/i);
-      });
-    });
   });
 
   test("audit command handles playbook errors gracefully (JSON mode)", async () => {

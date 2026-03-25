@@ -654,7 +654,7 @@ Use generateObject from the Vercel AI SDK to write a structured diary entry (sta
 AI SDK
 +1
 
-Stores it as JSON under ~/.cass-memory/diary/*.json.
+Stores it as JSON under ~/.memory-system/diary/*.json.
 
 Output (stdout): pure JSON with the diary data, so any agent can ingest it.
 
@@ -666,7 +666,7 @@ Input: a set of diaries (global or per‑workspace).
 
 Action:
 
-Load existing playbook bullets from ~/.cass-memory/playbooks/*.jsonl.
+Load existing playbook bullets from ~/.memory-system/playbooks/*.jsonl.
 
 Call generateObject again with a Zod schema describing delta updates to the playbook (add / update / deprecate bullets with helpful/harmful counters). 
 ar5iv
@@ -753,7 +753,7 @@ const DEFAULT_MODEL =
   process.env.CASS_MEMORY_MODEL || 'openai/gpt-4.1-mini';
 
 const HOME = os.homedir();
-const CONFIG_DIR = path.join(HOME, '.cass-memory');
+const CONFIG_DIR = path.join(HOME, '.memory-system');
 const DIARY_DIR = path.join(CONFIG_DIR, 'diary');
 const PLAYBOOK_DIR = path.join(CONFIG_DIR, 'playbooks');
 const REFLECTION_DIR = path.join(CONFIG_DIR, 'reflections');
@@ -1497,16 +1497,16 @@ Commands:
   diary
     - Calls \`cass export <session> --format markdown --include-tools\`.
     - Uses the Vercel AI SDK to generate a structured diary entry JSON.
-    - Saves entries under ~/.cass-memory/diary/*.json (unless --dry-run).
+    - Saves entries under ~/.memory-system/diary/*.json (unless --dry-run).
     - Always prints a JSON envelope with the diary on stdout.
 
   reflect
     - Loads diaries (global or workspace-scoped) and the existing playbook.
     - Uses the Vercel AI SDK to generate ACE-style deltas: add/update/deprecate bullets.
     - Applies deltas deterministically and saves the playbook as JSONL:
-        ~/.cass-memory/playbooks/playbook.global.jsonl
-        ~/.cass-memory/playbooks/playbook.ws-<hash>.jsonl
-    - Tracks processed diaries in ~/.cass-memory/reflections/*.log.
+        ~/.memory-system/playbooks/playbook.global.jsonl
+        ~/.memory-system/playbooks/playbook.ws-<hash>.jsonl
+    - Tracks processed diaries in ~/.memory-system/reflections/*.log.
 
 Environment:
 

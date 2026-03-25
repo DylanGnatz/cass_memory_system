@@ -8,12 +8,26 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOllama } from "ollama-ai-provider";
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
-import type { Config, DiaryEntry, LLMProvider } from "./types.js";
+import type { Config, DiaryEntry, LLMProvider, ReflectorCall1Output, ReflectorCall2Output, DiaryFromNoteOutput } from "./types.js";
+import { ReflectorCall1OutputSchema, ReflectorCall2OutputSchema, DiaryFromNoteOutputSchema } from "./types.js";
 import { checkBudget, recordCost } from "./cost.js";
 import { truncateForContext, warn } from "./utils.js";
 
 // Re-export LLMProvider from types.ts (single source of truth)
 export type { LLMProvider } from "./types.js";
+
+/**
+ * Create a config override for a specific pipeline step.
+ * If the step has a model override configured, returns config with that model.
+ * Empty string means "use default config.model".
+ */
+export type PipelineStep = "sessionNoteCreate" | "sessionNoteExtend" | "diaryFromNote" | "reflectorCall1" | "reflectorCall2" | "knowledgeGen";
+
+export function configForStep(config: Config, step: PipelineStep): Config {
+  const override = config.pipelineModels?.[step];
+  if (!override) return config;
+  return { ...config, model: override };
+}
 
 export interface LLMUsage {
   promptTokens: number;
@@ -338,6 +352,201 @@ Respond with:
   ],
   "summary": string
 }`,
+
+  sessionNoteCreate: `You are a session note generator for a coding knowledge management system. Your job is to compress a raw coding session transcript into a concise, information-dense session note.
+
+Write for someone who needs to pick up this work tomorrow. Include the specific details they'd need — paths, configs, error messages, ticket numbers — not the process of how you found them.
+
+<transcript>
+{transcript}
+</transcript>
+
+INCLUSION CRITERIA (what survives compression):
+- Specific facts: file paths, config values, API endpoints, error messages, version numbers
+- Decisions and their reasoning: why option A was chosen over B
+- Discovered behaviors: "X actually works like Y, not like the docs say"
+- Commands that worked (or didn't) and why
+- People mentioned and their roles/opinions
+- Links, ticket numbers, PR numbers, channel names — preserve ALL external URLs (API docs, library references, etc.) as clickable markdown links
+- Unresolved questions and open threads
+- Dead ends that taught something ("initially suspected retry logic, was actually HMAC key mismatch")
+
+EXCLUSION CRITERIA (what gets dropped):
+- Verbose back-and-forth debugging that led nowhere
+- Repeated attempts at the same fix
+- Boilerplate code generation that worked first try
+- Standard tool invocations with expected results
+- Meta-conversation about approach
+- The code itself (capture WHAT was built and WHY, not the implementation listing)
+
+FORMAT:
+- Use ## date — time headers (e.g. ## March 20, 2026 — 09:15)
+- Use ### topic headers (e.g. ### Initial investigation)
+- When the session touches multiple topics, insert topic transition headers: ### [Topic shift: Topic Name]
+- Be SPECIFIC and ACTIONABLE. Avoid generic statements like "wrote code" or "fixed bug". Include specific file names, function names, error messages.
+
+Respond with JSON:
+{
+  "abstract": "1-2 sentence summary of the full session",
+  "topics_touched": ["topic-slug-1", "topic-slug-2"],
+  "content": "The markdown body of the session note"
+}`,
+
+  sessionNoteAppend: `You are extending an existing session note with new transcript content. The session has continued and there is new content to add.
+
+<existing_note>
+{existingNote}
+</existing_note>
+
+<existing_abstract>
+{existingAbstract}
+</existing_abstract>
+
+<new_transcript>
+{newTranscript}
+</new_transcript>
+
+RULES:
+- Append ONLY what is genuinely new. Do NOT repeat what is already in the existing note.
+- Reference earlier findings where relevant ("as identified earlier, the HMAC key was the root cause").
+- Start with a brief context resumption sentence ("Continuing investigation into billing webhook failures.").
+- If the new content is from a different day than the last entry in the existing note, add a new ## date header.
+- If the session shifts to a new topic, use ### [Topic shift: Topic Name].
+- Detect if new content contradicts something in the existing note. If the transcript itself contains an explicit self-correction ("actually, I was wrong earlier"), capture the correction. Otherwise, just add the new information as new sections — the Validator will catch contradictions later.
+- Update the abstract to cover the FULL note (existing + new content).
+- Update topics_touched to include any new topics.
+
+INCLUSION/EXCLUSION CRITERIA: Same as initial note generation — include specific facts, decisions, outcomes, references. Omit debugging noise, boilerplate, meta-conversation.
+
+Respond with JSON:
+{
+  "abstract": "Updated 1-2 sentence summary covering the FULL note",
+  "topics_touched": ["all-topic-slugs", "including-new-ones"],
+  "new_content": "ONLY the new section(s) to append"
+}`,
+
+  diaryFromNote: `You are generating a structured diary entry from a session note. The diary entry is an internal scaffold used by the Reflector to identify patterns and generate knowledge. It should be a compressed structural summary, NOT a rewrite of the note.
+
+SESSION NOTE (frontmatter):
+- Session: {sessionId}
+- Topics: {topicsTouched}
+- Abstract: {abstract}
+
+<session_note_body>
+{noteContent}
+</session_note_body>
+
+INSTRUCTIONS:
+Map the session note into these fields. Be SPECIFIC — include file names, error messages, config paths. Do not add information that isn't in the note.
+
+- status: "success" if the session achieved its goals, "failure" if blocked/unresolved, "mixed" if partial
+- accomplishments: Concrete completed tasks (1 bullet each, max 8)
+- decisions: Design choices with brief rationale (max 5)
+- challenges: Problems encountered, dead ends, blockers (max 5)
+- preferences: User workflow preferences or style choices revealed
+- keyLearnings: Insights reusable in future sessions (max 5)
+- tags: 3-8 keyword tags for search discovery`,
+
+  reflectorCall1: `You are extracting reusable rules and topic classifications from a coding session.
+
+<diary_entry>
+Status: {status}
+Accomplishments:
+{accomplishments}
+Decisions:
+{decisions}
+Challenges:
+{challenges}
+Key Learnings:
+{keyLearnings}
+</diary_entry>
+
+<existing_topics>
+{existingTopics}
+</existing_topics>
+
+<existing_playbook>
+{existingBullets}
+</existing_playbook>
+
+INSTRUCTIONS — BULLETS:
+Extract playbook bullet proposals from this session. Each bullet is a terse, reusable rule.
+
+Quality criteria:
+- SPECIFIC: Bad: "Write tests". Good: "For React hooks, test effects separately with renderHook"
+- ACTIONABLE: Include concrete file patterns, command flags, config paths
+- REUSABLE: Would help a DIFFERENT agent on a similar problem in the future
+- NOT REDUNDANT: Check existing_playbook — don't propose rules already covered
+
+Bullet fields:
+- content: The rule text (1-2 sentences max)
+- scope: "global" (any project), "workspace" (this repo), "language", "framework", or "task"
+- category: Short category label (e.g. "testing", "deployment", "error-handling")
+- type: "rule" (do this) or "anti-pattern" (don't do this)
+- kind: "project_convention", "stack_pattern", "workflow_rule", or "anti_pattern"
+- reasoning: Why this bullet is worth extracting (1 sentence)
+
+Maximum 10 bullets. Prefer fewer, higher-quality bullets over many weak ones.
+
+INSTRUCTIONS — TOPIC SUGGESTIONS:
+If the session covered a subject area NOT covered by any existing topic, suggest a new topic. The user will review and approve/dismiss suggestions — so err on the side of suggesting rather than dropping knowledge silently.
+
+Rules:
+- Prefer routing to existing topics when they fit, especially user-defined ones
+- If no existing topic covers the session's main subject, ALWAYS suggest one
+- Topics should be broad enough to accumulate knowledge over time (e.g. "transit-data-processing" not "fix-gtfs-parser-bug")
+- Include a clear description so the system knows what to route there in the future
+
+Topic fields:
+- slug: kebab-case identifier (e.g. "billing-webhooks")
+- name: Human-readable name (e.g. "Billing Webhooks")
+- description: 1-sentence description of what this topic covers
+- reasoning: Why this should be a standalone topic
+
+Maximum 3 topic suggestions per session.`,
+
+  reflectorCall2: `You are revising knowledge pages with new information from a coding session.
+
+Each knowledge page is a cohesive markdown document about a topic. Your job is to REVISE existing pages by incorporating new information from the session — producing the full updated page content.
+
+<diary_entry>
+{diaryText}
+</diary_entry>
+
+<session_note>
+{sessionNote}
+</session_note>
+
+<existing_knowledge_pages>
+{knowledgePages}
+</existing_knowledge_pages>
+
+<available_topics>
+{availableTopics}
+</available_topics>
+
+PAGE UPDATES:
+For each topic page that needs updating, provide the FULL revised markdown content for that sub-page. The content you return will REPLACE the existing page content entirely.
+
+Rules:
+- Only update pages for topics that ALREADY EXIST in <available_topics>
+- PRESERVE all existing content that's still accurate — don't drop information
+- INTEGRATE new facts from the session into the existing narrative naturally
+- If new information CONTRADICTS existing content and you're confident the new info is correct (e.g., "actually the config is at X, not Y"), update the text
+- If you're NOT SURE which version is correct, KEEP BOTH and add an entry to the contradictions array describing the conflict
+- Be conservative: when in doubt, keep existing content and flag the contradiction
+- Include external URLs as markdown links where referenced
+- Skip ephemeral facts (local env state, one-off debug output)
+- It's fine to produce zero page_updates if no existing topic fits the session
+
+For each update, provide:
+- topic_slug: Which topic (must exist in available_topics)
+- sub_page: Which sub-page ("_index" for the main page, or a specific sub-page slug)
+- revised_content: The FULL revised markdown content for this sub-page
+- contradictions: Array of conflicts you couldn't resolve (each with description, existing_claim, new_claim)
+
+DIGEST:
+Write a single paragraph (2-4 sentences) summarizing this session for the daily digest. Focus on outcomes and decisions.`,
 } as const;
 
 export function fillPrompt(
@@ -750,6 +959,143 @@ Make queries specific enough to be useful but broad enough to match variations.`
     );
     return result.queries;
   }, "generateSearchQueries");
+}
+
+// --- Session Note Generation ---
+
+import {
+  SessionNoteCreateOutputSchema,
+  SessionNoteAppendOutputSchema,
+  type SessionNoteCreateOutput,
+  type SessionNoteAppendOutput,
+} from "./session-notes.js";
+
+export async function generateSessionNoteContent(
+  transcript: string,
+  transcriptPath: string,
+  config: Config,
+  io: LLMIO = DEFAULT_LLM_IO
+): Promise<SessionNoteCreateOutput> {
+  const safeTranscript = truncateForContext(transcript, { maxChars: 80000 });
+
+  const prompt = fillPrompt(PROMPTS.sessionNoteCreate, {
+    transcript: safeTranscript,
+  });
+
+  return llmWithRetry(async () => {
+    return generateObjectSafe(SessionNoteCreateOutputSchema, prompt, configForStep(config, "sessionNoteCreate"), 3, io);
+  }, "generateSessionNoteContent");
+}
+
+export async function extendSessionNoteContent(
+  existingNoteBody: string,
+  newTranscript: string,
+  existingAbstract: string,
+  config: Config,
+  io: LLMIO = DEFAULT_LLM_IO
+): Promise<SessionNoteAppendOutput> {
+  const safeExisting = truncateForContext(existingNoteBody, { maxChars: 30000 });
+  const safeNewTranscript = truncateForContext(newTranscript, { maxChars: 50000 });
+
+  const prompt = fillPrompt(PROMPTS.sessionNoteAppend, {
+    existingNote: safeExisting,
+    existingAbstract,
+    newTranscript: safeNewTranscript,
+  });
+
+  return llmWithRetry(async () => {
+    return generateObjectSafe(SessionNoteAppendOutputSchema, prompt, configForStep(config, "sessionNoteExtend"), 3, io);
+  }, "extendSessionNoteContent");
+}
+
+// --- Phase 3: Diary From Note ---
+
+export async function extractDiaryFromNote(
+  sessionNote: { id: string; abstract: string; topicsTouched: string[]; body: string },
+  config: Config,
+  io: LLMIO = DEFAULT_LLM_IO
+): Promise<DiaryFromNoteOutput> {
+  const safeContent = truncateForContext(sessionNote.body, { maxChars: 30000 });
+
+  const prompt = fillPrompt(PROMPTS.diaryFromNote, {
+    sessionId: sessionNote.id,
+    topicsTouched: sessionNote.topicsTouched.join(", ") || "none",
+    abstract: sessionNote.abstract,
+    noteContent: safeContent,
+  });
+
+  return llmWithRetry(async () => {
+    return generateObjectSafe(DiaryFromNoteOutputSchema, prompt, configForStep(config, "diaryFromNote"), 3, io);
+  }, "extractDiaryFromNote");
+}
+
+// --- Phase 3: Reflector Call 1 (Structural/Extractive) ---
+
+export async function runReflectorCall1(
+  diary: DiaryEntry,
+  existingTopics: string,
+  existingBullets: string,
+  config: Config,
+  io: LLMIO = DEFAULT_LLM_IO
+): Promise<ReflectorCall1Output> {
+  // Check for stubs in E2E test mode
+  if (io === DEFAULT_LLM_IO) {
+    const stub = nextReflectorStub<ReflectorCall1Output>();
+    if (stub) return stub;
+  }
+
+  const prompt = fillPrompt(PROMPTS.reflectorCall1, {
+    status: diary.status,
+    accomplishments: diary.accomplishments.length > 0
+      ? diary.accomplishments.map(a => `- ${a}`).join("\n")
+      : "- (none recorded)",
+    decisions: diary.decisions.length > 0
+      ? diary.decisions.map(d => `- ${d}`).join("\n")
+      : "- (none recorded)",
+    challenges: diary.challenges.length > 0
+      ? diary.challenges.map(c => `- ${c}`).join("\n")
+      : "- (none recorded)",
+    keyLearnings: diary.keyLearnings.length > 0
+      ? diary.keyLearnings.map(k => `- ${k}`).join("\n")
+      : "- (none recorded)",
+    existingTopics: truncateForContext(existingTopics, { maxChars: 10000 }),
+    existingBullets: truncateForContext(existingBullets, { maxChars: 20000 }),
+  });
+
+  return llmWithRetry(async () => {
+    return generateObjectSafe(ReflectorCall1OutputSchema, prompt, configForStep(config, "reflectorCall1"), 3, io);
+  }, "runReflectorCall1");
+}
+
+// --- Phase 3: Reflector Call 2 (Generative/Narrative) ---
+
+export async function runReflectorCall2(
+  diary: DiaryEntry,
+  sessionNote: string,
+  knowledgePages: string,
+  availableTopics: string,
+  sessionId: string,
+  config: Config,
+  io: LLMIO = DEFAULT_LLM_IO
+): Promise<ReflectorCall2Output> {
+  const diaryText = `Status: ${diary.status}
+Accomplishments: ${diary.accomplishments.join(", ") || "(none)"}
+Decisions: ${diary.decisions.join(", ") || "(none)"}
+Challenges: ${diary.challenges.join(", ") || "(none)"}
+Key Learnings: ${diary.keyLearnings.join(", ") || "(none)"}
+Tags: ${diary.tags.join(", ") || "(none)"}`;
+
+  const prompt = fillPrompt(PROMPTS.reflectorCall2, {
+    diaryText,
+    sessionNote: truncateForContext(sessionNote, { maxChars: 30000 }),
+    knowledgePages: truncateForContext(knowledgePages, { maxChars: 30000 }),
+    availableTopics,
+    sessionId,
+  });
+
+  return llmWithRetry(async () => {
+    return generateObjectSafe(ReflectorCall2OutputSchema, prompt, configForStep(config, "reflectorCall2"), 3, io);
+  }, "runReflectorCall2");
 }
 
 // --- Multi-Provider Fallback ---

@@ -96,7 +96,7 @@ describe("undo command - Unit Tests", () => {
 
   beforeEach(() => {
     testDir = mkdtempSync(join(tmpdir(), "cass-undo-test-"));
-    const cassMemoryDir = join(testDir, ".cass-memory");
+    const cassMemoryDir = join(testDir, ".memory-system");
     mkdirSync(cassMemoryDir, { recursive: true });
     playbookPath = join(cassMemoryDir, "playbook.yaml");
 

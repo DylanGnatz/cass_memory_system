@@ -159,7 +159,7 @@ async function loadRepoConfig(repoCassDir: string): Promise<{
 
 export async function loadConfig(cliOverrides: Partial<Config> = {}): Promise<Config> {
   const defaults = getCachedDefaults();
-  const globalConfigPath = expandPath("~/.cass-memory/config.json");
+  const globalConfigPath = expandPath("~/.memory-system/config.json");
   const globalConfigRaw = await loadConfigFile(globalConfigPath);
 
   // Migrate deprecated llm.* shape to top-level
@@ -300,6 +300,6 @@ export async function loadConfig(cliOverrides: Partial<Config> = {}): Promise<Co
 }
 
 export async function saveConfig(config: Config): Promise<void> {
-  const globalConfigPath = expandPath("~/.cass-memory/config.json");
+  const globalConfigPath = expandPath("~/.memory-system/config.json");
   await atomicWrite(globalConfigPath, JSON.stringify(config, null, 2));
 }

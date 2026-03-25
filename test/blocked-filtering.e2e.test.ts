@@ -69,7 +69,7 @@ describe("Blocked Bullet Filtering - E2E", () => {
         process.chdir(repo);
 
         // Create playbook with eval-related bullet
-        const globalPath = path.join(home, ".cass-memory", "playbook.yaml");
+        const globalPath = path.join(home, ".memory-system", "playbook.yaml");
         const playbook = createEmptyPlaybook("test");
         playbook.bullets = [
           createTestBullet({ id: "b-eval", content: "Never use eval()" }),
@@ -78,7 +78,7 @@ describe("Blocked Bullet Filtering - E2E", () => {
         await writePlaybookFile(globalPath, playbook);
 
         // Add eval rule to blocked list
-        const blockedPath = path.join(home, ".cass-memory", "blocked.log");
+        const blockedPath = path.join(home, ".memory-system", "blocked.log");
         await writeBlockedLog(blockedPath, [
           {
             id: "blocked-1",
@@ -120,7 +120,7 @@ describe("Blocked Bullet Filtering - E2E", () => {
         await fs.mkdir(repo, { recursive: true });
         process.chdir(repo);
 
-        const globalPath = path.join(home, ".cass-memory", "playbook.yaml");
+        const globalPath = path.join(home, ".memory-system", "playbook.yaml");
         const playbook = createEmptyPlaybook("test");
         // Different whitespace/case but same semantic content
         playbook.bullets = [
@@ -129,7 +129,7 @@ describe("Blocked Bullet Filtering - E2E", () => {
         ];
         await writePlaybookFile(globalPath, playbook);
 
-        const blockedPath = path.join(home, ".cass-memory", "blocked.log");
+        const blockedPath = path.join(home, ".memory-system", "blocked.log");
         await writeBlockedLog(blockedPath, [
           {
             id: "blocked-1",
@@ -178,7 +178,7 @@ describe("Blocked Bullet Filtering - E2E", () => {
         const similarity = jaccardSimilarity(blockedContent, similarContent);
         expect(similarity).toBeGreaterThan(0.85);
 
-        const globalPath = path.join(home, ".cass-memory", "playbook.yaml");
+        const globalPath = path.join(home, ".memory-system", "playbook.yaml");
         const playbook = createEmptyPlaybook("test");
         playbook.bullets = [
           createTestBullet({ id: "b-similar", content: similarContent }),
@@ -186,7 +186,7 @@ describe("Blocked Bullet Filtering - E2E", () => {
         ];
         await writePlaybookFile(globalPath, playbook);
 
-        const blockedPath = path.join(home, ".cass-memory", "blocked.log");
+        const blockedPath = path.join(home, ".memory-system", "blocked.log");
         await writeBlockedLog(blockedPath, [
           {
             id: "blocked-1",
@@ -234,14 +234,14 @@ describe("Blocked Bullet Filtering - E2E", () => {
         const similarity = jaccardSimilarity(blockedContent, differentIntent);
         expect(similarity).toBeLessThan(0.85);
 
-        const globalPath = path.join(home, ".cass-memory", "playbook.yaml");
+        const globalPath = path.join(home, ".memory-system", "playbook.yaml");
         const playbook = createEmptyPlaybook("test");
         playbook.bullets = [
           createTestBullet({ id: "b-different", content: differentIntent }),
         ];
         await writePlaybookFile(globalPath, playbook);
 
-        const blockedPath = path.join(home, ".cass-memory", "blocked.log");
+        const blockedPath = path.join(home, ".memory-system", "blocked.log");
         await writeBlockedLog(blockedPath, [
           {
             id: "blocked-1",
@@ -280,7 +280,7 @@ describe("Blocked Bullet Filtering - E2E", () => {
         execSync("git init", { cwd: repo, stdio: "pipe" });
         process.chdir(repo);
 
-        const globalPath = path.join(home, ".cass-memory", "playbook.yaml");
+        const globalPath = path.join(home, ".memory-system", "playbook.yaml");
         const repoPath = path.join(repo, ".cass", "playbook.yaml");
 
         // Bullets in both playbooks
@@ -300,7 +300,7 @@ describe("Blocked Bullet Filtering - E2E", () => {
         await writePlaybookFile(repoPath, repoPb);
 
         // Global blocked log
-        const globalBlockedPath = path.join(home, ".cass-memory", "blocked.log");
+        const globalBlockedPath = path.join(home, ".memory-system", "blocked.log");
         await writeBlockedLog(globalBlockedPath, [
           {
             id: "blocked-g1",

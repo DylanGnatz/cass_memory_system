@@ -6,13 +6,10 @@ import { describe, test, expect } from "bun:test";
 import { writeFileSync } from "node:fs";
 import yaml from "yaml";
 
-import { guardCommand } from "../src/commands/guard.js";
 import { initCommand } from "../src/commands/init.js";
 import { markCommand, recordFeedback } from "../src/commands/mark.js";
 import { generateSimilarResults, similarCommand } from "../src/commands/similar.js";
-import { startersCommand } from "../src/commands/starters.js";
 import { statsCommand } from "../src/commands/stats.js";
-import { traumaCommand } from "../src/commands/trauma.js";
 import { usageCommand } from "../src/commands/usage.js";
 
 import { withTempCassHome } from "./helpers/temp.js";
@@ -87,38 +84,6 @@ async function withCwd<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
 }
 
 describe("commands basic unit coverage (JSON + validation)", () => {
-  test("guardCommand reports missing flags (JSON error)", async () => {
-    const capture = captureConsole();
-    process.exitCode = 0;
-    try {
-      await guardCommand({ json: true });
-    } finally {
-      capture.restore();
-    }
-
-    const err = parseJsonError(capture.output());
-    expect(err.code).toBe("MISSING_REQUIRED");
-  });
-
-  test("guardCommand --install reports missing .claude directory (JSON error)", async () => {
-    await withKeepTemp(async () => {
-      await withTempCassHome(async (env) => {
-        await withCwd(env.home, async () => {
-          const capture = captureConsole();
-          process.exitCode = 0;
-          try {
-            await guardCommand({ install: true, json: true });
-          } finally {
-            capture.restore();
-          }
-
-          const err = parseJsonError(capture.output());
-          expect(err.code).toBe("FILE_NOT_FOUND");
-        });
-      });
-    });
-  });
-
   test("initCommand refuses --force without --yes when state exists (JSON error)", async () => {
     await withKeepTemp(async () => {
       await withTempCassHome(async (env) => {
@@ -210,38 +175,6 @@ describe("commands basic unit coverage (JSON + validation)", () => {
           expect(data.query).toBe("Prefer structured logs");
           expect(data.results.length).toBeGreaterThan(0);
         });
-      });
-    });
-  });
-
-  test("traumaCommand rejects unknown action (JSON error)", async () => {
-    const capture = captureConsole();
-    process.exitCode = 0;
-    try {
-      await traumaCommand("unknown", [], { json: true });
-    } finally {
-      capture.restore();
-    }
-
-    const err = parseJsonError(capture.output());
-    expect(err.code).toBe("INVALID_INPUT");
-  });
-
-  test("startersCommand returns built-in starters (JSON)", async () => {
-    await withKeepTemp(async () => {
-      await withTempCassHome(async () => {
-        const capture = captureConsole();
-        process.exitCode = 0;
-        try {
-          await startersCommand({ json: true });
-        } finally {
-          capture.restore();
-        }
-
-        const data = parseJsonSuccess(capture.output());
-        expect(Array.isArray(data.starters)).toBe(true);
-        expect(data.starters.length).toBeGreaterThan(0);
-        expect(data.starters.some((s: any) => s.name === "general")).toBe(true);
       });
     });
   });
@@ -355,6 +288,9 @@ describe("commands basic unit coverage (JSON + validation)", () => {
   test("generateSimilarResults returns keyword matches in global scope", async () => {
     await withKeepTemp(async () => {
       await withTempCassHome(async (env) => {
+        // Force keyword mode for deterministic test (no model downloads)
+        writeFileSync(env.configPath, JSON.stringify({ semanticSearchEnabled: false }, null, 2));
+
         const bullets = [
           createTestBullet({ id: "b-logs", content: "Prefer structured logs", scope: "global" }),
           createTestBullet({ id: "b-timeouts", content: "Set explicit timeouts", scope: "workspace" }),

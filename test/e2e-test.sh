@@ -5,7 +5,7 @@ set -euo pipefail
 CM_BIN="./src/cm.ts"
 RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cm-e2e-XXXXXX")"
 export HOME="$RUN_DIR/home"
-mkdir -p "$HOME/.cass-memory"
+mkdir -p "$HOME/.memory-system"
 
 # Force degraded mode (no cass, no LLM)
 export CASS_PATH="__missing__"
@@ -27,7 +27,7 @@ run_step() {
 
 # 1) init
 run_step init bun run "$CM_BIN" init
-test -f "$HOME/.cass-memory/config.json"
+test -f "$HOME/.memory-system/config.json"
 
 # 2) stats empty
 run_step stats-empty bun run "$CM_BIN" stats --json
@@ -50,7 +50,7 @@ run_step mark-helpful bun run "$CM_BIN" mark "$BULLET_ID" --helpful --session "e
 TASK="file operations and atomic writes"
 run_step context bun run "$CM_BIN" context "$TASK" --json
 grep "$RULE_CONTENT" "$RUN_DIR/context.out"
-grep '"historySnippets": \[\]' "$RUN_DIR/context.out"
+grep '"searchResults": \[\]' "$RUN_DIR/context.out"
 
 # 6) stats should show total >=1
 run_step stats-after bun run "$CM_BIN" stats --json

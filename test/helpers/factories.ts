@@ -59,7 +59,7 @@ export function createTestConfig(overrides: Partial<Config> = {}): Config {
       agents: [],
       auditLog: true
     },
-    semanticSearchEnabled: false,
+    semanticSearchEnabled: true,
     semanticWeight: 0.6,
     embeddingModel: "Xenova/all-MiniLM-L6-v2",
     verbose: false,

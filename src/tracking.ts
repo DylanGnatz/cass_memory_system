@@ -120,7 +120,7 @@ export type UsageEvent =
 // Usage Analytics Implementation
 // -----------------------------------------------------------------------------
 
-const DEFAULT_USAGE_LOG_PATH = "~/.cass-memory/usage.jsonl";
+const DEFAULT_USAGE_LOG_PATH = "~/.memory-system/usage.jsonl";
 let usageLogPathOverride: string | null = null;
 
 /**
@@ -388,7 +388,7 @@ export async function getUsageStats(): Promise<{
 // Processed log paths
 // -----------------------------------------------------------------------------
 
-const DEFAULT_REFLECTIONS_DIR = "~/.cass-memory/reflections";
+const DEFAULT_REFLECTIONS_DIR = "~/.memory-system/reflections";
 
 export function getProcessedLogPath(workspacePath?: string): string {
   const reflectionsDir = expandPath(DEFAULT_REFLECTIONS_DIR);

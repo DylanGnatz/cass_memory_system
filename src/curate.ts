@@ -2,11 +2,20 @@ import {
   Config,
   Playbook,
   PlaybookDelta,
+  KnowledgeDelta,
+  Topic,
   CurationResult,
   PlaybookBullet,
   InversionReport,
   DecisionLogEntry
 } from "./types.js";
+import {
+  appendSectionToPage,
+  updatePageContent,
+  appendToDigest,
+  addTopicSuggestion,
+  loadTopics,
+} from "./knowledge-page.js";
 import { 
   findBullet, 
   addBullet, 
@@ -716,6 +725,122 @@ export function curatePlaybook(
         content: bullet.content.slice(0, 100),
         details: { from: prevMaturity, to: demotionCheck }
       });
+    }
+  }
+
+  return result;
+}
+
+// ============================================================================
+// PHASE 3: KNOWLEDGE DELTA CURATION
+// ============================================================================
+
+export interface KnowledgeCurationResult {
+  sectionsWritten: number;
+  sectionsSkipped: number;
+  digestsUpdated: number;
+  topicsAdded: number;
+  topicsSkipped: number;
+  decisionLog: DecisionLogEntry[];
+}
+
+/**
+ * Curate knowledge deltas deterministically (no LLM).
+ * Handles three delta types:
+ *   - knowledge_page_append: append section to topic page (source-session-ID dedup)
+ *   - digest_update: append paragraph to daily digest
+ *   - topic_suggestion: add to topics.json
+ */
+export async function curateKnowledge(
+  deltas: KnowledgeDelta[],
+  existingTopics: Topic[],
+  config: Config
+): Promise<KnowledgeCurationResult> {
+  const decisionLog: DecisionLogEntry[] = [];
+  const result: KnowledgeCurationResult = {
+    sectionsWritten: 0,
+    sectionsSkipped: 0,
+    digestsUpdated: 0,
+    topicsAdded: 0,
+    topicsSkipped: 0,
+    decisionLog,
+  };
+
+  for (const delta of deltas) {
+    switch (delta.type) {
+      case "knowledge_page_update": {
+        const topic = existingTopics.find(t => t.slug === delta.topic_slug);
+        if (!topic) {
+          result.sectionsSkipped++;
+          logDecision(decisionLog, "add", "skipped", `Topic "${delta.topic_slug}" not in topics.json — skipping`, {
+            content: `${delta.topic_slug}/${delta.sub_page}`,
+          });
+          break;
+        }
+
+        const { written, reason } = await updatePageContent(delta, topic, config);
+        if (written) {
+          result.sectionsWritten++;
+          logDecision(decisionLog, "add", "accepted", `Knowledge page updated: ${reason}`, {
+            content: `${delta.topic_slug}/${delta.sub_page}`,
+            details: { contradictions: delta.contradictions?.length || 0 },
+          });
+
+          // Report any contradictions the LLM flagged
+          if (delta.contradictions && delta.contradictions.length > 0) {
+            const { reportContradiction } = await import("./review-queue.js");
+            for (const c of delta.contradictions) {
+              await reportContradiction(
+                delta.topic_slug,
+                delta.sub_page,
+                c.description,
+                [
+                  { claim: c.existing_claim, source: "existing", date: delta.updated_date },
+                  { claim: c.new_claim, source: delta.source_session, date: delta.updated_date },
+                ],
+                config
+              );
+            }
+          }
+        } else {
+          result.sectionsSkipped++;
+          logDecision(decisionLog, "add", "skipped", `Knowledge page update skipped: ${reason}`, {
+            content: `${delta.topic_slug}/${delta.sub_page}`,
+          });
+        }
+        break;
+      }
+
+      case "digest_update": {
+        await appendToDigest(delta.date, delta.content, delta.sessions_covered, config);
+        result.digestsUpdated++;
+        logDecision(decisionLog, "add", "accepted", `Digest updated for ${delta.date}`, {
+          details: { sessionsCovered: delta.sessions_covered },
+        });
+        break;
+      }
+
+      case "topic_suggestion": {
+        const { added, reason } = await addTopicSuggestion(
+          delta.slug,
+          delta.name,
+          delta.description,
+          delta.suggested_from_session,
+          config
+        );
+        if (added) {
+          result.topicsAdded++;
+          logDecision(decisionLog, "add", "accepted", `Topic suggestion added: ${reason}`, {
+            content: delta.slug,
+          });
+        } else {
+          result.topicsSkipped++;
+          logDecision(decisionLog, "add", "skipped", `Topic suggestion skipped: ${reason}`, {
+            content: delta.slug,
+          });
+        }
+        break;
+      }
     }
   }
 
